@@ -31,6 +31,8 @@ set(sources
   lfr.cc
   lodr-fst.cc
   math.cc
+  nomo-pvad-model-config.cc
+  nomo-pvad-model.cc
   normal-data-generator.cc
   offline-canary-model-config.cc
   offline-canary-model.cc
