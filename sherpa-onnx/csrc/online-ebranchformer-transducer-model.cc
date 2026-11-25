@@ -4,7 +4,6 @@
 //                2025  Brno University of Technology (author: Karel Vesely)
 
 #include "sherpa-onnx/csrc/online-ebranchformer-transducer-model.h"
-#include "sherpa-onnx/csrc/ort-env.h"
 
 #include <algorithm>
 #include <cassert>
@@ -39,7 +38,7 @@ namespace sherpa_onnx {
 
 OnlineEbranchformerTransducerModel::OnlineEbranchformerTransducerModel(
     const OnlineModelConfig &config)
-    : env_(CreateOrtEnv()),
+    : env_(ORT_LOGGING_LEVEL_ERROR),
       encoder_sess_opts_(GetSessionOptions(config)),
       decoder_sess_opts_(GetSessionOptions(config, "decoder")),
       joiner_sess_opts_(GetSessionOptions(config, "joiner")),
@@ -61,7 +60,7 @@ OnlineEbranchformerTransducerModel::OnlineEbranchformerTransducerModel(
 template <typename Manager>
 OnlineEbranchformerTransducerModel::OnlineEbranchformerTransducerModel(
     Manager *mgr, const OnlineModelConfig &config)
-    : env_(CreateOrtEnv()),
+    : env_(ORT_LOGGING_LEVEL_ERROR),
       config_(config),
       encoder_sess_opts_(GetSessionOptions(config)),
       decoder_sess_opts_(GetSessionOptions(config, "decoder")),
@@ -352,7 +351,7 @@ OnlineEbranchformerTransducerModel::GetEncoderInitStates() {
       ans.push_back(std::move(v));
     }
 
-    {  // cahced_value_{i}
+    {  // cached_value_{i}
       std::array<int64_t, 4> s{1, num_heads_, left_context_len_, head_dim_};
       auto v = Ort::Value::CreateTensor<float>(allocator_, s.data(), s.size());
       Fill(&v, 0);

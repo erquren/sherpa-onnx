@@ -1,7 +1,7 @@
 package main
 
 import (
-	sherpa "github.com/k2-fsa/sherpa-onnx-go/sherpa_onnx"
+	sherpa "github.com/k2-fsa/sherpa-onnx-go/v2/sherpa_onnx"
 	"log"
 )
 
@@ -10,6 +10,7 @@ func main() {
 
 	config := sherpa.OfflineSpeechDenoiserConfig{}
 	config.Model.DpdfNet.Model = "./dpdfnet_baseline.onnx"
+	config.Model.DpdfNet.AttenuationLimitDb = 12
 	config.Model.NumThreads = 1
 	config.Model.Debug = 1
 

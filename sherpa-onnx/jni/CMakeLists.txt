@@ -13,8 +13,10 @@ endif()
 set(sources
   audio-tagging.cc
   common.cc
+  forced-aligner.cc
   jni.cc
   keyword-spotter.cc
+  offline-diacritization.cc
   offline-punctuation.cc
   offline-recognizer.cc
   offline-speech-denoiser.cc

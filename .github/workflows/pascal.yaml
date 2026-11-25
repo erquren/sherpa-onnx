@@ -109,6 +109,8 @@ jobs:
           if [[ ${{ matrix.os }} == 'windows-2022' ]]; then
             cp -v install/lib/*.dll ../pascal-api-examples/non-streaming-asr
             cp -v install/lib/*.dll ../pascal-api-examples/read-wav
+            cp -v install/lib/*.dll ../pascal-api-examples/forced-alignment-english
+            cp -v install/lib/*.dll ../pascal-api-examples/forced-alignment-chinese
             cp -v install/lib/*.dll ../pascal-api-examples/speaker-diarization
             cp -v install/lib/*.dll ../pascal-api-examples/speech-enhancement-gtcrn
             cp -v install/lib/*.dll ../pascal-api-examples/speech-enhancement-dpdfnet
@@ -118,9 +120,16 @@ jobs:
             cp -v install/lib/*.dll ../pascal-api-examples/tts
             cp -v install/lib/*.dll ../pascal-api-examples/vad
             cp -v install/lib/*.dll ../pascal-api-examples/vad-with-non-streaming-asr
+            cp -v install/lib/*.dll ../pascal-api-examples/version
+            cp -v install/lib/*.dll ../pascal-api-examples/speech-enhancement-voxlock
+            cp -v install/lib/*.dll ../pascal-api-examples/speech-enhancement-voxlock-with-voice-sample
+            cp -v install/lib/*.dll ../pascal-api-examples/streaming-speech-enhancement-voxlock
+            cp -v install/lib/*.dll ../pascal-api-examples/streaming-speech-enhancement-voxlock-with-voice-sample
 
             cp -v ../sherpa-onnx/pascal-api/*.pas ../pascal-api-examples/non-streaming-asr
             cp -v ../sherpa-onnx/pascal-api/*.pas ../pascal-api-examples/read-wav
+            cp -v ../sherpa-onnx/pascal-api/*.pas ../pascal-api-examples/forced-alignment-english
+            cp -v ../sherpa-onnx/pascal-api/*.pas ../pascal-api-examples/forced-alignment-chinese
             cp -v ../sherpa-onnx/pascal-api/*.pas ../pascal-api-examples/speaker-diarization
             cp -v ../sherpa-onnx/pascal-api/*.pas ../pascal-api-examples/speech-enhancement-gtcrn
             cp -v ../sherpa-onnx/pascal-api/*.pas ../pascal-api-examples/speech-enhancement-dpdfnet
@@ -130,7 +139,109 @@ jobs:
             cp -v ../sherpa-onnx/pascal-api/*.pas ../pascal-api-examples/tts
             cp -v ../sherpa-onnx/pascal-api/*.pas ../pascal-api-examples/vad
             cp -v ../sherpa-onnx/pascal-api/*.pas ../pascal-api-examples/vad-with-non-streaming-asr
+            cp -v ../sherpa-onnx/pascal-api/*.pas ../pascal-api-examples/version
+            cp -v ../sherpa-onnx/pascal-api/*.pas ../pascal-api-examples/speech-enhancement-voxlock
+            cp -v ../sherpa-onnx/pascal-api/*.pas ../pascal-api-examples/speech-enhancement-voxlock-with-voice-sample
+            cp -v ../sherpa-onnx/pascal-api/*.pas ../pascal-api-examples/streaming-speech-enhancement-voxlock
+            cp -v ../sherpa-onnx/pascal-api/*.pas ../pascal-api-examples/streaming-speech-enhancement-voxlock-with-voice-sample
           fi
+
+      - name:  Run Pascal version test
+        shell: bash
+        run: |
+          cd ./pascal-api-examples
+
+          pushd version
+          ./run.sh
+          popd
+
+      - name:  Run Pascal test (forced alignment)
+        shell: bash
+        run: |
+          cd ./pascal-api-examples
+
+          pushd forced-alignment-english
+          ./run.sh
+          popd
+
+          pushd forced-alignment-chinese
+          ./run.sh
+          popd
+
+      - name: Show fa result english-mfa-v3.1.0
+        shell: bash
+        run: cat pascal-api-examples/forced-alignment-english/en.TextGrid
+
+      - name: Show fa result zh-aishell3-pinyin
+        shell: bash
+        run: cat pascal-api-examples/forced-alignment-chinese/zh.TextGrid
+
+      - name: Setup Python
+        uses: actions/setup-python@v7
+        with:
+          python-version: "3.12"
+
+      - name: Extract word wavs from the TextGrids
+        shell: bash
+        run: |
+          python3 -m pip install soundfile
+          python3 ./python-api-examples/textgrid-to-word-wavs.py \
+            --wav pascal-api-examples/forced-alignment-english/english-mfa-v3.1.0/en.wav \
+            --textgrid pascal-api-examples/forced-alignment-english/en.TextGrid \
+            --out-dir word-clips-en
+          python3 ./python-api-examples/textgrid-to-word-wavs.py \
+            --wav pascal-api-examples/forced-alignment-chinese/zh-aishell3-pinyin/zh.wav \
+            --textgrid pascal-api-examples/forced-alignment-chinese/zh.TextGrid \
+            --out-dir word-clips-zh
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: fa-textgrids-english-mfa-v3.1.0-${{ matrix.os }}
+          path: pascal-api-examples/forced-alignment-english/en.TextGrid
+          if-no-files-found: warn
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: fa-textgrids-zh-aishell3-pinyin-${{ matrix.os }}
+          path: pascal-api-examples/forced-alignment-chinese/zh.TextGrid
+          if-no-files-found: warn
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: fa-word-clips-english-mfa-v3.1.0-${{ matrix.os }}
+          path: ./word-clips-en
+          if-no-files-found: warn
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: fa-word-clips-zh-aishell3-pinyin-${{ matrix.os }}
+          path: ./word-clips-zh
+          if-no-files-found: warn
+
+      - name:  Run Speech Enhancement test (VoxLock)
+        shell: bash
+        run: |
+          cd ./pascal-api-examples
+
+          pushd speech-enhancement-voxlock
+          ./run-voxlock.sh
+          ls -lh
+          popd
+
+          pushd speech-enhancement-voxlock-with-voice-sample
+          ./run-voxlock.sh
+          ls -lh
+          popd
+
+          pushd streaming-speech-enhancement-voxlock
+          ./run-voxlock.sh
+          ls -lh
+          popd
+
+          pushd streaming-speech-enhancement-voxlock-with-voice-sample
+          ./run-voxlock.sh
+          ls -lh
+          popd
 
       - name:  Run Pascal test (Cohere Transcribe)
         shell: bash
@@ -140,6 +251,9 @@ jobs:
           pushd non-streaming-asr
           ./run-cohere-transcribe.sh
           rm -rf sherpa-onnx-cohere-transcribe-*
+          echo "---"
+          ./run-zipformer-ctc-hlg.sh
+          rm -rf sherpa-onnx-zipformer-ctc-*
           echo "---"
           popd
 
@@ -179,6 +293,7 @@ jobs:
 
           ./run-piper.sh
           rm -rf vits-piper-*
+          rm -f lexicon-en-us.txt
           rm piper
           ls -lh
           echo "---"
@@ -191,6 +306,7 @@ jobs:
 
           ./run-kokoro-en.sh
           rm -rf kokoro-en-*
+          rm -f lexicon-en-us.txt
           rm kokoro-en
           ls -lh
           echo "---"
@@ -203,6 +319,7 @@ jobs:
 
           ./run-matcha-en.sh
           rm -rf matcha-icefall-*
+          rm -f lexicon-en-us.txt
           rm matcha-en
           ls -lh
           echo "---"
@@ -216,6 +333,7 @@ jobs:
           ./run-zipvoice-zh-en.sh
           rm -rf sherpa-onnx-zipvoice-*
           rm -f vocos_24khz.onnx
+          rm -f lexicon-en-us.txt
           rm zipvoice-zh-en
           ls -lh
           echo "---"
@@ -424,3 +542,27 @@ jobs:
           echo "---"
           ls -lh
           popd
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: speech-enhancement-voxlock-${{ matrix.os }}
+          path: pascal-api-examples/speech-enhancement-voxlock/*.wav
+          if-no-files-found: warn
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: speech-enhancement-voxlock-with-voice-sample-${{ matrix.os }}
+          path: pascal-api-examples/speech-enhancement-voxlock-with-voice-sample/*.wav
+          if-no-files-found: warn
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: streaming-speech-enhancement-voxlock-${{ matrix.os }}
+          path: pascal-api-examples/streaming-speech-enhancement-voxlock/*.wav
+          if-no-files-found: warn
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: streaming-speech-enhancement-voxlock-with-voice-sample-${{ matrix.os }}
+          path: pascal-api-examples/streaming-speech-enhancement-voxlock-with-voice-sample/*.wav
+          if-no-files-found: warn

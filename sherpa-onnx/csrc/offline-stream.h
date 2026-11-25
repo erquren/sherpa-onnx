@@ -8,9 +8,11 @@
 
 #include <memory>
 #include <string>
+#include <utility>
 #include <vector>
 
 #include "sherpa-onnx/csrc/context-graph.h"
+#include "sherpa-onnx/csrc/fa-feature-extractor.h"
 #include "sherpa-onnx/csrc/features.h"
 #include "sherpa-onnx/csrc/parse-options.h"
 
@@ -27,6 +29,11 @@ struct OfflineRecognitionResult {
   std::vector<std::string> tokens;
 
   std::string lang;
+
+  // Per-language probabilities from Whisper's language identification pass.
+  // Empty unless the per-stream option "top_k_langs" is set.
+  // Each pair is {language_code, probability}.
+  std::vector<std::pair<std::string, float>> lang_probs;
 
   // emotion target of the audio.
   std::string emotion;
@@ -60,6 +67,17 @@ struct OfflineRecognitionResult {
 
 struct WhisperTag {
   int32_t dim = 80;
+
+  // When true, place each analysis window so that its midpoint is at
+  // i * frame_shift, matching the centered STFT that OpenAI Whisper's
+  // feature extractor uses (torch.stft with center=True). The kaldi-style
+  // placement used otherwise centers frame i at
+  // i * frame_shift + frame_shift / 2, i.e. every frame is half a
+  // frame-shift (5 ms) late relative to the convention the models were
+  // trained on. Models that are robust to the 5 ms offset (e.g. Whisper
+  // itself) keep the historical behavior; Qwen3-ASR is sensitive to it
+  // (see k2-fsa/sherpa-onnx#3535), so its recognizer opts in.
+  bool align_to_stft_center = false;
 };
 
 struct CEDTag {};
@@ -71,6 +89,12 @@ struct MoonshineTag {};
 // It is based on Wav2Vec, accepting raw audio samples as input
 struct OmnilingualAsrTag {};
 
+// It keeps the audio samples, resampled to sample_rate if needed.
+// GetFrames() returns them.
+struct SpeakerDiarizationTag {
+  int32_t sample_rate = 16000;
+};
+
 class OfflineStream {
  public:
   explicit OfflineStream(const FeatureExtractorConfig &config = {},
@@ -80,6 +104,9 @@ class OfflineStream {
   explicit OfflineStream(CEDTag tag);
   explicit OfflineStream(MoonshineTag tag);
   explicit OfflineStream(OmnilingualAsrTag tag);
+  explicit OfflineStream(SpeakerDiarizationTag tag);
+  explicit OfflineStream(const FaFeatureConfig &config);
+
   ~OfflineStream();
 
   /**

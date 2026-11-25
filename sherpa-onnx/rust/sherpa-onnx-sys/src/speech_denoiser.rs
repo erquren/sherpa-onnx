@@ -10,6 +10,15 @@ pub struct OfflineSpeechDenoiserGtcrnModelConfig {
 #[derive(Debug, Copy, Clone)]
 pub struct OfflineSpeechDenoiserDpdfNetModelConfig {
     pub model: *const c_char,
+    pub attenuation_limit_db: f32,
+}
+
+#[repr(C)]
+#[derive(Debug, Copy, Clone)]
+pub struct OfflineSpeechDenoiserVoxLockModelConfig {
+    pub enroll_model: *const c_char,
+    pub chunk_model: *const c_char,
+    pub voice_sample: *const c_char,
 }
 
 #[repr(C)]
@@ -20,6 +29,7 @@ pub struct OfflineSpeechDenoiserModelConfig {
     pub debug: i32,
     pub provider: *const c_char,
     pub dpdfnet: OfflineSpeechDenoiserDpdfNetModelConfig,
+    pub voxlock: OfflineSpeechDenoiserVoxLockModelConfig,
 }
 
 #[repr(C)]

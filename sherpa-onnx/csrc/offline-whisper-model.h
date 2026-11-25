@@ -77,8 +77,18 @@ class OfflineWhisperModel {
                  Ort::Value n_layer_self_v_cache, Ort::Value n_layer_cross_k,
                  Ort::Value n_layer_cross_v, Ort::Value offset) const;
 
-  int32_t DetectLanguage(Ort::Value &cross_k,   // NOLINT
-                         Ort::Value &cross_v);  // NOLINT
+  // Empty language_candidate_ids means unrestricted language detection.
+  int32_t DetectLanguage(
+      Ort::Value &cross_k, Ort::Value &cross_v,  // NOLINT
+      const std::vector<int32_t> &language_candidate_ids);
+
+  // Same as DetectLanguage but also returns the softmax distribution over all
+  // supported languages via *probs. Candidate restriction still applies to the
+  // returned top 1 ID. Probs are always computed over the full language set.
+  int32_t DetectLanguageWithProbs(
+      Ort::Value &cross_k, Ort::Value &cross_v,  // NOLINT
+      const std::vector<int32_t> &language_candidate_ids,
+      std::vector<std::pair<std::string, float>> *probs);
 
   /** Return the initial self kv cache in a pair
    *  - n_layer_self_k_cache A 4-D tensor of shape

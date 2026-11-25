@@ -1,10 +1,13 @@
 // sherpa-onnx/csrc/features.cc
 //
 // Copyright (c)  2023  Xiaomi Corporation
+// Copyright (c)  2026  Julian Pscheid
 
 #include "sherpa-onnx/csrc/features.h"
 
 #include <algorithm>
+#include <cmath>
+#include <limits>
 #include <memory>
 #include <mutex>
 #include <sstream>
@@ -12,6 +15,7 @@
 #include <vector>
 
 #include "kaldi-native-fbank/csrc/online-feature.h"
+#include "kaldi-native-fbank/csrc/online-nemo-fbank.h"
 #include "sherpa-onnx/csrc/macros.h"
 #include "sherpa-onnx/csrc/resample.h"
 
@@ -59,7 +63,18 @@ std::string FeatureExtractorConfig::ToString() const {
 class FeatureExtractor::Impl {
  public:
   explicit Impl(const FeatureExtractorConfig &config) : config_(config) {
-    if (config_.is_mfcc) {
+    if (config_.nemo_buffered_capacity) {
+      knf::NemoFbankOptions opts;
+      opts.samp_freq = config_.sampling_rate;
+      opts.frame_shift_ms = config_.frame_shift_ms;
+      opts.frame_length_ms = config_.frame_length_ms;
+      opts.num_mel_bins = config_.feature_dim;
+      opts.low_freq = config_.low_freq;
+      opts.high_freq = config_.high_freq;
+      opts.preemph_coeff = config_.preemph_coeff;
+      opts.buffered_capacity = config_.nemo_buffered_capacity;
+      nemo_buffered_ = std::make_unique<knf::OnlineNemoFbank>(opts);
+    } else if (config_.is_mfcc) {
       InitMfcc();
     } else if (config_.is_whisper) {
       InitWhisper();
@@ -84,7 +99,7 @@ class FeatureExtractor::Impl {
 
   void AcceptWaveformImpl(int32_t sampling_rate, const float *waveform,
                           int32_t n) {
-    std::lock_guard<std::mutex> lock(mutex_);
+    std::scoped_lock lock(mutex_);
 
     if (resampler_) {
       if (sampling_rate != resampler_->GetInputSamplingRate()) {
@@ -131,8 +146,17 @@ class FeatureExtractor::Impl {
   }
 
   void InputFinished() const {
-    std::lock_guard<std::mutex> lock(mutex_);
-    if (fbank_) {
+    std::scoped_lock lock(mutex_);
+    if (nemo_buffered_) {
+      if (resampler_) {
+        std::vector<float> tail;
+        resampler_->Resample(nullptr, 0, true, &tail);
+        nemo_buffered_->AcceptWaveform(config_.sampling_rate, tail.data(),
+                                       tail.size());
+      }
+      nemo_buffered_->InputFinished();
+      return;
+    } else if (fbank_) {
       fbank_->InputFinished();
       return;
     } else if (whisper_fbank_) {
@@ -151,7 +175,9 @@ class FeatureExtractor::Impl {
   }
 
   int32_t NumFramesReady() const {
-    if (fbank_) {
+    if (nemo_buffered_) {
+      return nemo_buffered_->NumFramesReady();
+    } else if (fbank_) {
       return fbank_->NumFramesReady();
     } else if (whisper_fbank_) {
       return whisper_fbank_->NumFramesReady();
@@ -166,8 +192,10 @@ class FeatureExtractor::Impl {
   }
 
   bool IsLastFrame(int32_t frame) const {
-    std::lock_guard<std::mutex> lock(mutex_);
-    if (fbank_) {
+    std::scoped_lock lock(mutex_);
+    if (nemo_buffered_) {
+      return nemo_buffered_->IsLastFrame(frame);
+    } else if (fbank_) {
       return fbank_->IsLastFrame(frame);
     } else if (whisper_fbank_) {
       return whisper_fbank_->IsLastFrame(frame);
@@ -182,11 +210,26 @@ class FeatureExtractor::Impl {
     return false;
   }
 
-  std::vector<float> GetFrames(int32_t frame_index, int32_t n) {
-    std::lock_guard<std::mutex> lock(mutex_);
+  int32_t NumTrailingSamples() const {
+    std::scoped_lock lock(mutex_);
+    return nemo_buffered_ ? nemo_buffered_->NumTrailingSamples() : 0;
+  }
+
+  std::vector<float> GetFrames(int32_t frame_index, int32_t n,
+                               bool is_final = false,
+                               int32_t *start_sample_offset = nullptr) {
+    std::scoped_lock lock(mutex_);
+    if (start_sample_offset) {
+      *start_sample_offset = 0;
+    }
     if (frame_index + n > NumFramesReady()) {
       SHERPA_ONNX_LOGE("%d + %d > %d\n", frame_index, n, NumFramesReady());
       SHERPA_ONNX_EXIT(-1);
+    }
+
+    if (nemo_buffered_) {
+      return nemo_buffered_->GetFrames(frame_index, n, is_final,
+                                       start_sample_offset);
     }
 
     int32_t discard_num = frame_index - last_frame_index_;
@@ -215,7 +258,9 @@ class FeatureExtractor::Impl {
   }
 
   int32_t FeatureDim() const {
-    if (fbank_ || whisper_fbank_) {
+    if (nemo_buffered_) {
+      return nemo_buffered_->Dim();
+    } else if (fbank_ || whisper_fbank_) {
       return opts_.mel_opts.num_bins;
     } else if (mfcc_) {
       return mfcc_opts_.num_ceps;
@@ -231,7 +276,10 @@ class FeatureExtractor::Impl {
  private:
   void AcceptWaveformWrapper(float sampling_rate, const float *waveform,
                              int32_t n) const {
-    if (fbank_) {
+    if (nemo_buffered_) {
+      nemo_buffered_->AcceptWaveform(sampling_rate, waveform, n);
+      return;
+    } else if (fbank_) {
       fbank_->AcceptWaveform(sampling_rate, waveform, n);
       return;
     } else if (whisper_fbank_) {
@@ -302,6 +350,12 @@ class FeatureExtractor::Impl {
 
     opts_.mel_opts.is_librosa = config_.is_librosa;
 
+    if (config_.use_nemo_log_guard) {
+      // Same as the offline NeMo features; see offline-stream.cc
+      opts_.use_log_floor = false;
+      opts_.eps = std::numeric_limits<float>::epsilon() / 2;
+    }
+
     fbank_ = std::make_unique<knf::OnlineFbank>(opts_);
   }
 
@@ -351,6 +405,7 @@ class FeatureExtractor::Impl {
   }
 
  private:
+  std::unique_ptr<knf::OnlineNemoFbank> nemo_buffered_;
   std::unique_ptr<knf::OnlineFbank> fbank_;
   std::unique_ptr<knf::OnlineMfcc> mfcc_;
   std::unique_ptr<knf::OnlineWhisperFbank> whisper_fbank_;
@@ -387,6 +442,16 @@ bool FeatureExtractor::IsLastFrame(int32_t frame) const {
 std::vector<float> FeatureExtractor::GetFrames(int32_t frame_index,
                                                int32_t n) const {
   return impl_->GetFrames(frame_index, n);
+}
+
+std::vector<float> FeatureExtractor::GetBufferedFeatures(
+    int32_t frame_index, int32_t n, bool is_final,
+    int32_t *start_sample_offset) const {
+  return impl_->GetFrames(frame_index, n, is_final, start_sample_offset);
+}
+
+int32_t FeatureExtractor::NumTrailingSamples() const {
+  return impl_->NumTrailingSamples();
 }
 
 int32_t FeatureExtractor::FeatureDim() const { return impl_->FeatureDim(); }

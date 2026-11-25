@@ -44,6 +44,27 @@ class OfflineStream {
   setOption(key, value) {
     addon.offlineStreamSetOption(this.handle, key, value);
   }
+
+  /**
+   * Get a string option of the underlying offline stream.
+   *
+   * Returns an empty string if the option has not been set; use hasOption()
+   * to distinguish an unset option from an empty value.
+   * @param {string} key
+   * @returns {string}
+   */
+  getOption(key) {
+    return addon.offlineStreamGetOption(this.handle, key);
+  }
+
+  /**
+   * Check whether an option has been set on the underlying offline stream.
+   * @param {string} key
+   * @returns {boolean}
+   */
+  hasOption(key) {
+    return addon.offlineStreamHasOption(this.handle, key);
+  }
 }
 
 /**
@@ -92,10 +113,24 @@ class OfflineRecognizer {
 
   /**
    * Create a new OfflineStream bound to this recognizer.
+   *
+   * The optional hotwords argument enables contextual biasing for this
+   * stream only. Hotwords are supported only by transducer models decoded
+   * with decodingMethod 'modified_beam_search'. Separate multiple phrases
+   * with '/', and optionally append a per-phrase boosting score, e.g.
+   * 'PHOEBE :2.0/DON QUIXOTE'. When modelConfig.modelingUnit and
+   * modelConfig.bpeVocab are set, phrases are given as normal words;
+   * otherwise each phrase must be a sequence of tokens from tokens.txt
+   * separated by spaces. See also
+   * https://k2-fsa.github.io/sherpa/onnx/hotwords/index.html
+   *
+   * @param {string} [hotwords] Optional hotwords for this stream.
    * @returns {OfflineStream}
    */
-  createStream() {
-    const handle = addon.createOfflineStream(this.handle);
+  createStream(hotwords) {
+    const handle = hotwords === undefined ?
+        addon.createOfflineStream(this.handle) :
+        addon.createOfflineStream(this.handle, hotwords);
     return new OfflineStream(handle);
   }
 

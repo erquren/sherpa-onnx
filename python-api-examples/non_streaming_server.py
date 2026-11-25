@@ -213,6 +213,13 @@ def setup_logger(
 
 def add_transducer_model_args(parser: argparse.ArgumentParser):
     parser.add_argument(
+        "--model-type",
+        default="transducer",
+        choices=["transducer", "nemo_transducer"],
+        help="Transducer family. Use nemo_transducer for Parakeet TDT and Orukeet.",
+    )
+
+    parser.add_argument(
         "--encoder",
         default="",
         type=str,
@@ -490,7 +497,7 @@ def check_args(args):
         raise ValueError(f"Unsupported decoding method {args.decoding_method}")
 
     if args.decoding_method == "modified_beam_search":
-        assert args.num_active_paths > 0, args.num_active_paths
+        assert args.max_active_paths > 0, args.max_active_paths
         assert Path(args.encoder).is_file(), args.encoder
         assert Path(args.decoder).is_file(), args.decoder
         assert Path(args.joiner).is_file(), args.joiner
@@ -772,7 +779,7 @@ or <a href="/offline_record.html">/offline_record.html</a>
 
         The second and remaining messages contain audio samples.
 
-        Please refer to ./offline-websocket-client-decode-files-paralell.py
+        Please refer to ./offline-websocket-client-decode-files-parallel.py
         and ./offline-websocket-client-decode-files-sequential.py
         for how the client sends the message.
 
@@ -963,6 +970,7 @@ def create_recognizer(args) -> sherpa_onnx.OfflineRecognizer:
             decoder=args.decoder,
             joiner=args.joiner,
             tokens=args.tokens,
+            model_type=args.model_type,
             num_threads=args.num_threads,
             sample_rate=args.sample_rate,
             feature_dim=args.feat_dim,

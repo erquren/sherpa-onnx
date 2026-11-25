@@ -10,6 +10,7 @@
 #include <string>
 #include <vector>
 
+#include "sherpa-onnx/csrc/file-utils.h"
 #include "sherpa-onnx/csrc/macros.h"
 
 namespace sherpa_onnx {
@@ -59,7 +60,7 @@ bool WriteWave(const std::string &filename, int32_t sampling_rate,
 
   WriteWave(buffer.data(), sampling_rate, samples_ch0, samples_ch1, n);
 
-  std::ofstream os(filename, std::ios::binary);
+  auto os = OpenOutputFile(filename, std::ios::binary);
   if (!os) {
     SHERPA_ONNX_LOGE("Failed to create '%s'", filename.c_str());
     return false;
@@ -76,7 +77,7 @@ bool WriteWave(const std::string &filename, int32_t sampling_rate,
 
 void WriteWave(char *buffer, int32_t sampling_rate, const float *samples_ch0,
                const float *samples_ch1, int32_t n) {
-  WaveHeader header{};
+  WaveHeader header = {};
   header.chunk_id = 0x46464952;      // FFIR
   header.format = 0x45564157;        // EVAW
   header.subchunk1_id = 0x20746d66;  // "fmt "
@@ -135,7 +136,7 @@ bool WriteWaveMultiChannel(const std::string &filename, int32_t sampling_rate,
 
   WriteWaveMultiChannel(buffer.data(), sampling_rate, samples, num_channels, n);
 
-  std::ofstream os(filename, std::ios::binary);
+  auto os = OpenOutputFile(filename, std::ios::binary);
   if (!os) {
     SHERPA_ONNX_LOGE("Failed to create '%s'", filename.c_str());
     return false;
@@ -153,7 +154,7 @@ bool WriteWaveMultiChannel(const std::string &filename, int32_t sampling_rate,
 void WriteWaveMultiChannel(char *buffer, int32_t sampling_rate,
                            const float *const *samples, int32_t num_channels,
                            int32_t n) {
-  WaveHeader header{};
+  WaveHeader header = {};
   header.chunk_id = 0x46464952;      // FFIR
   header.format = 0x45564157;        // EVAW
   header.subchunk1_id = 0x20746d66;  // "fmt "

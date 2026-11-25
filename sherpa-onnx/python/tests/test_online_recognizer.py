@@ -6,6 +6,7 @@
 #
 #  ctest --verbose -R  test_online_recognizer_py
 
+import re
 import unittest
 import wave
 from pathlib import Path
@@ -143,6 +144,132 @@ class TestOnlineRecognizer(unittest.TestCase):
                     print(f"{wave_filename}\n{result}")
                     print("-" * 10)
 
+    def test_nemotron_streaming_english(self):
+        m = "sherpa-onnx-nemotron-speech-streaming-en-0.6b-560ms-int8-2026-04-25"
+        encoder = f"{d}/{m}/encoder.int8.onnx"
+        decoder = f"{d}/{m}/decoder.int8.onnx"
+        joiner = f"{d}/{m}/joiner.int8.onnx"
+        tokens = f"{d}/{m}/tokens.txt"
+        wave0 = f"{d}/{m}/test_wavs/0.wav"
+
+        if not Path(encoder).is_file():
+            print("skipping test_nemotron_streaming_english()")
+            return
+
+        recognizer = sherpa_onnx.OnlineRecognizer.from_transducer(
+            encoder=encoder,
+            decoder=decoder,
+            joiner=joiner,
+            tokens=tokens,
+            num_threads=1,
+            provider="cpu",
+        )
+        s = recognizer.create_stream()
+        samples, sample_rate = read_wave(wave0)
+        s.accept_waveform(sample_rate, samples)
+
+        tail_paddings = np.zeros(int(0.2 * sample_rate), dtype=np.float32)
+        s.accept_waveform(sample_rate, tail_paddings)
+
+        s.input_finished()
+        while recognizer.is_ready(s):
+            recognizer.decode_stream(s)
+        result = recognizer.get_result(s)
+        print(result)
+        self.assertTrue(len(result) > 0)
+
+    def test_nemotron_multilingual_streaming(self):
+        m = "sherpa-onnx-nemotron-3.5-asr-streaming-0.6b-560ms-int8-2026-06-11"
+        encoder = f"{d}/{m}/encoder.int8.onnx"
+        decoder = f"{d}/{m}/decoder.int8.onnx"
+        joiner = f"{d}/{m}/joiner.int8.onnx"
+        tokens = f"{d}/{m}/tokens.txt"
+        ja_wave = f"{d}/{m}/test_wavs/ja.wav"
+        en_wave = f"{d}/{m}/test_wavs/en.wav"
+
+        if not Path(encoder).is_file():
+            print("skipping test_nemotron_multilingual_streaming()")
+            return
+
+        recognizer = sherpa_onnx.OnlineRecognizer.from_transducer(
+            encoder=encoder,
+            decoder=decoder,
+            joiner=joiner,
+            tokens=tokens,
+            num_threads=1,
+            provider="cpu",
+        )
+
+        def decode(wave_filename: str, language: str = ""):
+            s = recognizer.create_stream()
+            if language:
+                s.set_option("language", language)
+
+            samples, sample_rate = read_wave(wave_filename)
+            s.accept_waveform(sample_rate, samples)
+
+            tail_paddings = np.zeros(int(0.2 * sample_rate), dtype=np.float32)
+            s.accept_waveform(sample_rate, tail_paddings)
+
+            s.input_finished()
+            while recognizer.is_ready(s):
+                recognizer.decode_stream(s)
+
+            return recognizer.get_result(s)
+
+        ja = decode(ja_wave, "ja")
+        auto = decode(ja_wave, "auto")
+        unset = decode(ja_wave)
+        en = decode(en_wave, "en")
+
+        print(f"ja: {ja}")
+        print(f"auto: {auto}")
+        print(f"unset: {unset}")
+        print(f"en: {en}")
+
+        self.assertTrue(len(ja) > 0)
+        self.assertTrue(len(auto) > 0)
+        self.assertTrue(len(unset) > 0)
+        self.assertTrue(len(en) > 0)
+        self.assertTrue(any(ord(c) > 127 for c in ja))
+        for result in [ja, auto, unset, en]:
+            self.assertIsNone(re.search(r"<[a-z]{2,3}(-[A-Z]{2})?>", result))
+
+    def test_nemo_streaming_log_zero_guard(self):
+        ctc = f"{d}/sherpa-onnx-nemo-streaming-fast-conformer-ctc-en-80ms"
+        transducer = f"{d}/sherpa-onnx-nemo-streaming-fast-conformer-transducer-en-80ms"
+
+        recognizers = []
+        if Path(f"{ctc}/model.onnx").is_file():
+            recognizers.append(
+                sherpa_onnx.OnlineRecognizer.from_nemo_ctc(
+                    model=f"{ctc}/model.onnx",
+                    tokens=f"{ctc}/tokens.txt",
+                    num_threads=1,
+                )
+            )
+        if Path(f"{transducer}/encoder.onnx").is_file():
+            recognizers.append(
+                sherpa_onnx.OnlineRecognizer.from_transducer(
+                    encoder=f"{transducer}/encoder.onnx",
+                    decoder=f"{transducer}/decoder.onnx",
+                    joiner=f"{transducer}/joiner.onnx",
+                    tokens=f"{transducer}/tokens.txt",
+                    num_threads=1,
+                )
+            )
+        if not recognizers:
+            print("skipping test_nemo_streaming_log_zero_guard()")
+            return
+
+        # Like NeMo, use log(x + 2**-24), not log(max(x, FLT_EPSILON)).
+        # For digital silence, every feature is log(2**-24).
+        for recognizer in recognizers:
+            s = recognizer.create_stream()
+            s.accept_waveform(16000, np.zeros(16000, dtype=np.float32))
+            frames = np.array(s.get_frames(0, 10))
+            np.testing.assert_allclose(frames, np.log(2.0**-24), rtol=0, atol=1e-5)
+
     def test_zipformer2_ctc(self):
         m = "sherpa-onnx-streaming-zipformer-ctc-multi-zh-hans-2023-12-13"
         for use_int8 in [True, False]:
@@ -193,6 +320,81 @@ class TestOnlineRecognizer(unittest.TestCase):
             for wave_filename, result in zip(waves, results):
                 print(f"{wave_filename}\n{result}")
                 print("-" * 10)
+
+    def test_nemo_ctc_timestamps_and_endpoint(self):
+        m = "sherpa-onnx-nemo-streaming-fast-conformer-ctc-en-80ms"
+        model = f"{d}/{m}/model.onnx"
+        tokens = f"{d}/{m}/tokens.txt"
+        wave0 = f"{d}/{m}/test_wavs/0.wav"
+
+        if not Path(model).is_file():
+            print("skipping test_nemo_ctc_timestamps_and_endpoint()")
+            return
+
+        recognizer = sherpa_onnx.OnlineRecognizer.from_nemo_ctc(
+            model=model,
+            tokens=tokens,
+            num_threads=1,
+            enable_endpoint_detection=True,
+            rule2_min_trailing_silence=1.2,
+        )
+        s = recognizer.create_stream()
+        samples, sample_rate = read_wave(wave0)
+        s.accept_waveform(sample_rate, samples)
+
+        # The last word ends about 0.2 s before the end of the file
+        silence = np.zeros(int(2 * sample_rate), dtype=np.float32)
+        s.accept_waveform(sample_rate, silence)
+        while recognizer.is_ready(s):
+            recognizer.decode_stream(s)
+
+        # The model has subsampling factor 8, so one output frame is 80 ms
+        duration = len(samples) / sample_rate
+        timestamps = recognizer.get_result_all(s).timestamps
+        print(recognizer.get_result(s), timestamps[-1], duration)
+        self.assertGreater(timestamps[-1], duration - 1)
+        self.assertLess(timestamps[-1], duration)
+
+        # About 2.2 s of trailing silence: rule 2 (1.2 s) must have fired
+        self.assertTrue(recognizer.is_endpoint(s))
+
+    def test_streaming_paraformer(self):
+        m = "sherpa-onnx-streaming-paraformer-bilingual-zh-en"
+        encoder = f"{d}/{m}/encoder.int8.onnx"
+        decoder = f"{d}/{m}/decoder.int8.onnx"
+        tokens = f"{d}/{m}/tokens.txt"
+        wave2 = f"{d}/{m}/test_wavs/2.wav"
+
+        if not Path(encoder).is_file():
+            print("skipping test_streaming_paraformer()")
+            return
+
+        recognizer = sherpa_onnx.OnlineRecognizer.from_paraformer(
+            encoder=encoder,
+            decoder=decoder,
+            tokens=tokens,
+            num_threads=1,
+            provider="cpu",
+        )
+
+        s = recognizer.create_stream()
+        samples, sample_rate = read_wave(wave2)
+        s.accept_waveform(sample_rate, samples)
+
+        tail_paddings = np.zeros(int(0.66 * sample_rate), dtype=np.float32)
+        s.accept_waveform(sample_rate, tail_paddings)
+        s.input_finished()
+        while recognizer.is_ready(s):
+            recognizer.decode_stream(s)
+        result = recognizer.get_result(s)
+        print(f"{wave2}\n{result}")
+
+        # The reference transcript is obtained with the feature frontend
+        # the model was trained with (hamming window, snip_edges=True,
+        # high_freq=0, see InitFeatConfig in
+        # sherpa-onnx/csrc/online-recognizer-paraformer-impl.h); with the
+        # default frontend, 频繁 is misrecognized as 平繁/苹繁.
+        self.assertEqual(result, "这个是频繁的啊不认识接下来 frequently 频繁的")
 
     def test_wenet_ctc(self):
         models = [

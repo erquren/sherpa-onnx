@@ -3,7 +3,6 @@
 // Copyright (c)  2025  Xiaomi Corporation
 
 #include "sherpa-onnx/csrc/offline-tts-zipvoice-model.h"
-#include "sherpa-onnx/csrc/ort-env.h"
 
 #include <algorithm>
 #include <cstring>
@@ -36,7 +35,7 @@ class OfflineTtsZipvoiceModel::Impl {
  public:
   explicit Impl(const OfflineTtsModelConfig &config)
       : config_(config),
-        env_(CreateOrtEnv()),
+        env_(ORT_LOGGING_LEVEL_ERROR),
         sess_opts_(GetSessionOptions(config)),
         allocator_{} {
     encoder_sess_ = std::make_unique<Ort::Session>(
@@ -51,7 +50,7 @@ class OfflineTtsZipvoiceModel::Impl {
   template <typename Manager>
   Impl(Manager *mgr, const OfflineTtsModelConfig &config)
       : config_(config),
-        env_(CreateOrtEnv()),
+        env_(ORT_LOGGING_LEVEL_ERROR),
         sess_opts_(GetSessionOptions(config)),
         allocator_{} {
     auto buf = ReadFile(mgr, config.zipvoice.encoder);
@@ -67,7 +66,8 @@ class OfflineTtsZipvoiceModel::Impl {
 
   Ort::Value Run(Ort::Value tokens, Ort::Value prompt_tokens,
                  Ort::Value prompt_features, float speed, int32_t num_steps,
-                 float t_shift, float guidance_scale) {
+                 float t_shift, float guidance_scale,
+                 const ZipvoiceStepCallback &on_step) {
     std::vector<int64_t> tokens_shape =
         tokens.GetTensorTypeAndShapeInfo().GetShape();
 
@@ -85,6 +85,16 @@ class OfflineTtsZipvoiceModel::Impl {
     std::vector<int64_t> text_cond_shape =
         text_condition.GetTensorTypeAndShapeInfo().GetShape();
     int64_t num_frames = text_cond_shape[1];
+
+    if (num_frames <= prompt_feat_len) {
+      SHERPA_ONNX_LOGE(
+          "num_frames (%d) <= prompt_feat_len (%d) with speed %.3f. The text "
+          "is too short for this speed. Please use a smaller speed or a "
+          "shorter reference audio and text.",
+          static_cast<int32_t>(num_frames),
+          static_cast<int32_t>(prompt_feat_len), speed);
+      return Ort::Value{nullptr};
+    }
 
     int64_t feat_dim = meta_data_.feat_dim;
 
@@ -138,6 +148,10 @@ class OfflineTtsZipvoiceModel::Impl {
       const float *v_ptr = v.GetTensorData<float>();
       for (int64_t i = 0; i < N; ++i) {
         x_ptr[i] += v_ptr[i] * delta_t;
+      }
+
+      if (on_step && !on_step(step + 1, num_steps)) {
+        return Ort::Value{nullptr};
       }
     }
 
@@ -382,10 +396,12 @@ Ort::Value OfflineTtsZipvoiceModel::Run(Ort::Value tokens,
                                         float speed /*= 1.0*/,
                                         int32_t num_steps /*= 16*/,
                                         float t_shift /*= 0.5f*/,
-                                        float guidance_scale /*= 1.0f*/) const {
+                                        float guidance_scale /*= 1.0f*/,
+                                        const ZipvoiceStepCallback &on_step
+                                        /*= nullptr*/) const {
   return impl_->Run(std::move(tokens), std::move(prompt_tokens),
                     std::move(prompt_features), speed, num_steps, t_shift,
-                    guidance_scale);
+                    guidance_scale, on_step);
 }
 
 #if __ANDROID_API__ >= 9

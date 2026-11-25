@@ -10,6 +10,25 @@
 
 namespace sherpa_onnx {
 
+static constexpr const char *kOnlinePunctuationInitDoc = R"doc(
+Constructor for OnlinePunctuation.
+
+Args:
+  config:
+    Config for online punctuation.
+)doc";
+
+static constexpr const char *kOnlinePunctuationAddPunctuationWithCaseDoc = R"doc(
+Add punctuation and restore casing for the given text.
+
+Args:
+  text:
+    The input text without punctuation.
+
+Returns:
+  The text with punctuation and proper casing.
+)doc";
+
 static void PybindOnlinePunctuationModelConfig(py::module *m) {
   using PyClass = OnlinePunctuationModelConfig;
   py::class_<PyClass>(*m, "OnlinePunctuationModelConfig")
@@ -24,7 +43,8 @@ static void PybindOnlinePunctuationModelConfig(py::module *m) {
       .def_readwrite("num_threads", &PyClass::num_threads)
       .def_readwrite("debug", &PyClass::debug)
       .def_readwrite("provider", &PyClass::provider)
-      .def("validate", &PyClass::Validate)
+      .def("validate",
+           static_cast<bool (PyClass::*)() const>(&PyClass::Validate))
       .def("__str__", &PyClass::ToString);
 }
 
@@ -37,7 +57,8 @@ static void PybindOnlinePunctuationConfig(py::module *m) {
       .def(py::init<const OnlinePunctuationModelConfig &>(),
            py::arg("model_config"))
       .def_readwrite("model_config", &PyClass::model)
-      .def("validate", &PyClass::Validate)
+      .def("validate",
+           static_cast<bool (PyClass::*)() const>(&PyClass::Validate))
       .def("__str__", &PyClass::ToString);
 }
 
@@ -47,9 +68,11 @@ void PybindOnlinePunctuation(py::module *m) {
 
   py::class_<PyClass>(*m, "OnlinePunctuation")
       .def(py::init<const OnlinePunctuationConfig &>(), py::arg("config"),
-           py::call_guard<py::gil_scoped_release>())
+           py::call_guard<py::gil_scoped_release>(),
+           kOnlinePunctuationInitDoc)
       .def("add_punctuation_with_case", &PyClass::AddPunctuationWithCase,
-           py::arg("text"), py::call_guard<py::gil_scoped_release>());
+           py::arg("text"), py::call_guard<py::gil_scoped_release>(),
+           kOnlinePunctuationAddPunctuationWithCaseDoc);
 }
 
 }  // namespace sherpa_onnx

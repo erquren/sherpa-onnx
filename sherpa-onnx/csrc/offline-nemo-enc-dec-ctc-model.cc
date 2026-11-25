@@ -3,12 +3,12 @@
 // Copyright (c)  2023-2024  Xiaomi Corporation
 
 #include "sherpa-onnx/csrc/offline-nemo-enc-dec-ctc-model.h"
-#include "sherpa-onnx/csrc/ort-env.h"
 
 #include <memory>
 #include <string>
 #include <utility>
 #include <vector>
+
 
 #if __ANDROID_API__ >= 9
 #include "android/asset_manager.h"
@@ -32,7 +32,7 @@ class OfflineNemoEncDecCtcModel::Impl {
  public:
   explicit Impl(const OfflineModelConfig &config)
       : config_(config),
-        env_(CreateOrtEnv()),
+        env_(ORT_LOGGING_LEVEL_ERROR),
         sess_opts_(GetSessionOptions(config)),
         allocator_{} {
     sess_ = std::make_unique<Ort::Session>(
@@ -43,7 +43,7 @@ class OfflineNemoEncDecCtcModel::Impl {
   template <typename Manager>
   Impl(Manager *mgr, const OfflineModelConfig &config)
       : config_(config),
-        env_(CreateOrtEnv()),
+        env_(ORT_LOGGING_LEVEL_ERROR),
         sess_opts_(GetSessionOptions(config)),
         allocator_{} {
     auto buf = ReadFile(mgr, config_.nemo_ctc.model);
@@ -93,8 +93,8 @@ class OfflineNemoEncDecCtcModel::Impl {
  private:
   void Init(void *model_data, size_t model_data_length) {
     if (model_data) {
-      sess_ = std::make_unique<Ort::Session>(
-          env_, model_data, model_data_length, sess_opts_);
+      sess_ = std::make_unique<Ort::Session>(env_, model_data,
+                                             model_data_length, sess_opts_);
     } else if (!sess_) {
       SHERPA_ONNX_LOGE(
           "Please pass model data or initialize the session outside of "
@@ -124,6 +124,10 @@ class OfflineNemoEncDecCtcModel::Impl {
     SHERPA_ONNX_READ_META_DATA_STR_ALLOW_EMPTY(normalize_type_,
                                                "normalize_type");
     SHERPA_ONNX_READ_META_DATA_WITH_DEFAULT(is_giga_am_, "is_giga_am", 0);
+
+    if (normalize_type_ == "NA") {
+      normalize_type_ = "";
+    }
   }
 
  private:

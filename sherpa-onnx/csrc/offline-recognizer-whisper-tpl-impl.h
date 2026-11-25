@@ -76,6 +76,19 @@ class OfflineRecognizerWhisperTplImpl : public OfflineRecognizerImpl {
   }
 
   void DecodeStream(OfflineStream *s) const {
+    if (s->HasOption("language_candidates")) {
+      SHERPA_ONNX_LOGE(
+          "Warning: language_candidates is not supported by the QNN/Ascend "
+          "Whisper recognizer; ignoring the option and continuing recognition");
+    }
+
+    if (s->HasOption("language")) {
+      SHERPA_ONNX_LOGE(
+          "Warning: per-stream language override is not supported by the "
+          "QNN/Ascend Whisper recognizer; ignoring the option and continuing "
+          "recognition");
+    }
+
     int32_t feat_dim = s->FeatureDim();
     std::vector<float> f = s->GetFrames();
     int32_t num_frames = f.size() / feat_dim;
@@ -99,16 +112,20 @@ class OfflineRecognizerWhisperTplImpl : public OfflineRecognizerImpl {
         continue;
       }
 
+      // See offline-recognizer-whisper-impl.h: ITN must run on the
+      // concatenated text, not on individual byte-level-BPE tokens.
       std::string s = sym_table[i];
-      s = ApplyInverseTextNormalization(s);
-      s = ApplyHomophoneReplacer(std::move(s));
 
       text += s;
       r.tokens.push_back(s);
     }
 
+    text = ApplyInverseTextNormalization(text);
+    text = ApplyHomophoneReplacer(std::move(text));
+
     r.text = text;
     r.lang = src.lang;
+    r.lang_probs = src.lang_probs;
 
     return r;
   }

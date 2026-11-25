@@ -106,6 +106,17 @@ bool EncodeHotwords(std::istream &is, const std::string &modeling_unit,
                     const ssentencepiece::Ssentencepiece *bpe_encoder,
                     std::vector<std::vector<int32_t>> *hotwords,
                     std::vector<float> *boost_scores) {
+  if (bpe_encoder == nullptr &&
+      (modeling_unit == "bpe" || modeling_unit == "bbpe" ||
+       modeling_unit == "cjkchar+bpe")) {
+    SHERPA_ONNX_LOGE(
+        "modeling_unit is '%s' but bpe_encoder is nullptr. Please check "
+        "that decoding_method is modified_beam_search (the greedy-search "
+        "decoders never construct the BPE encoder) and that bpe_vocab is "
+        "set. Skipping hotwords.",
+        modeling_unit.c_str());
+    return false;
+  }
   std::vector<std::string> lines;
   std::string line;
   std::string word;
@@ -139,11 +150,23 @@ bool EncodeHotwords(std::istream &is, const std::string &modeling_unit,
     } else {
       phrase = phrase.substr(1);
     }
+    // A phrase given as tokens from tokens.txt (starting with a word-start
+    // piece, e.g. "▁Het zn er") is used as is.
+    bool pretokenized = phrase.rfind("\xe2\x96\x81", 0) == 0;
+    {
+      std::istringstream tiss(phrase);
+      std::string w;
+      while (pretokenized && tiss >> w) {
+        pretokenized = symbol_table.Contains(w);
+      }
+    }
     std::istringstream piss(phrase);
     oss.clear();
     oss.str("");
     while (piss >> word) {
-      if (modeling_unit == "cjkchar") {
+      if (pretokenized) {
+        oss << " " << word;
+      } else if (modeling_unit == "cjkchar") {
         for (const auto &w : SplitUtf8(word)) {
           oss << " " << w;
         }
@@ -156,14 +179,22 @@ bool EncodeHotwords(std::istream &is, const std::string &modeling_unit,
       } else if (modeling_unit == "bbpe") {
         std::vector<std::string> bpes;
 
+        // Match icefall's byte_encode(tokenize_by_CJK_char(text)), which is
+        // how bbpe models are trained: each CJK character is a word of its
+        // own, and other characters stay together, e.g. "你好HELLO" becomes
+        // "你 好 HELLO" before the bytes are mapped.
         const auto &id2token = GetByteBpeTableId2Token();
         std::string tokens;
-        for (size_t i = 0; i < word.length(); ++i) {
-          uint8_t byte = static_cast<uint8_t>(word[i]);
-          tokens += id2token.at(byte);
-          if ((i + 1) % 3 == 0 && (i + 1) < word.length()) {
-            tokens += " ";
+        bool prev_is_cjk = false;
+        for (char32_t cp : Utf8ToUtf32(word)) {
+          bool is_cjk = IsCJK(cp);
+          if (!tokens.empty() && (is_cjk || prev_is_cjk)) {
+            tokens += ' ';
           }
+          for (char c : Utf32ToUtf8(cp)) {
+            tokens += id2token.at(static_cast<uint8_t>(c));
+          }
+          prev_is_cjk = is_cjk;
         }
 
         bpe_encoder->Encode(tokens, &bpes);

@@ -1,4 +1,5 @@
 /** @typedef {import('./types').WaveObject} WaveObject */
+/** @typedef {import('./types').MultiChannelWaveObject} MultiChannelWaveObject */
 
 const os = require('os');
 const path = require('path');
@@ -15,6 +16,11 @@ const possible_paths = [
   `./node_modules/sherpa-onnx-${platform_arch}/sherpa-onnx.node`,
   `../sherpa-onnx-${platform_arch}/sherpa-onnx.node`,
   './sherpa-onnx.node',
+  // A bare specifier is resolved by node itself, which walks up the
+  // node_modules chain. It still finds the platform package when it is
+  // hoisted away from this package, or when the two packages end up at
+  // different depths with different versions.
+  `sherpa-onnx-${platform_arch}`,
 ];
 
 let addon = addonStaticImport;
@@ -94,5 +100,21 @@ if (!addon) {
  * @function module.exports.writeWave
  * @param {string} filename
  * @param {WaveObject} obj - { samples: Float32Array, sampleRate: number }
+ * @returns {boolean}
+ */
+
+/**
+ * Read a multi-channel wave file from disk.
+ * @function module.exports.readWaveMultiChannel
+ * @param {string} filename
+ * @param {boolean} [enableExternalBuffer=true]
+ * @returns {MultiChannelWaveObject}
+ */
+
+/**
+ * Write a multi-channel wave file to disk.
+ * @function module.exports.writeWaveMultiChannel
+ * @param {string} filename
+ * @param {MultiChannelWaveObject} obj - { samples: Float32Array[], sampleRate: number }
  * @returns {boolean}
  */

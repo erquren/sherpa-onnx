@@ -8,7 +8,7 @@ on:
     tags:
       - 'v[0-9]+.[0-9]+.[0-9]+*'
     paths:
-      - './build-swift-macos.sh'
+      - 'build-macos.sh'
       - '.github/workflows/swift.yaml'
       - 'cmake/**'
       - 'swift-api-examples/**'
@@ -20,7 +20,7 @@ on:
     branches:
       - master
     paths:
-      - './build-swift-macos.sh'
+      - 'build-macos.sh'
       - '.github/workflows/swift.yaml'
       - 'cmake/**'
       - 'swift-api-examples/**'
@@ -70,33 +70,65 @@ jobs:
           export PATH="/usr/lib/ccache:/usr/local/opt/ccache/libexec:$PATH"
           cmake --version
 
-          ./build-swift-macos.sh
+          ./build-macos.sh
 
-      - name: Copy files
-        if: matrix.os == 'macos-15-intel' && (github.repository_owner == 'csukuangfj' || github.repository_owner == 'k2-fsa') && github.event_name == 'push' && contains(github.ref, 'refs/tags/')
+      - name: Setup Python
+        uses: actions/setup-python@v7
+        with:
+          python-version: "3.12"
+
+      - name: Install Python dependencies
         shell: bash
         run: |
-          SHERPA_ONNX_VERSION=v$(grep "SHERPA_ONNX_VERSION" ./CMakeLists.txt  | cut -d " " -f 2  | cut -d '"' -f 2)
-
-          dst=sherpa-onnx-${SHERPA_ONNX_VERSION}-macos-xcframework-static
-          mkdir $dst
-
-          mv -v build-swift-macos/sherpa-onnx.xcframework $dst
-
-          brew install tree
-          tree $dst
-
-          tar cjvf ${dst}.tar.bz2 $dst
-
-      - name: Release pre-compiled binaries and libs for macOS
-        if: matrix.os == 'macos-15-intel' && (github.repository_owner == 'csukuangfj' || github.repository_owner == 'k2-fsa') && github.event_name == 'push' && contains(github.ref, 'refs/tags/')
-        uses: svenstaro/upload-release-action@v2
-        with:
-          file_glob: true
-          overwrite: true
-          file: sherpa-onnx-*macos-xcframework-static.tar.bz2
+          python3 -m pip install --upgrade soundfile
 
       - name: test
         shell: bash
         run: |
           .github/scripts/test-swift.sh
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: fa-english-mfa-v3.1.0-swift-${{ matrix.os }}
+          # each dir holds the test wav, the TextGrid and the word clips
+          path: swift-api-examples/test-forced-alignment-english
+          if-no-files-found: warn
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: fa-zh-aishell3-pinyin-swift-${{ matrix.os }}
+          path: swift-api-examples/test-forced-alignment-chinese
+          if-no-files-found: warn
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: tts-waves-${{ matrix.os }}
+          path: |
+            swift-api-examples/test-*-lexicon.wav
+            swift-api-examples/generated-*.wav
+          if-no-files-found: warn
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: speech-enhancement-voxlock-${{ matrix.os }}
+          # each run-*.sh keeps the input and output wavs in wav/<example>
+          path: swift-api-examples/wav/speech-enhancement-voxlock
+          if-no-files-found: warn
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: speech-enhancement-voxlock-with-voice-sample-${{ matrix.os }}
+          path: swift-api-examples/wav/speech-enhancement-voxlock-with-voice-sample
+          if-no-files-found: warn
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: online-speech-enhancement-voxlock-${{ matrix.os }}
+          path: swift-api-examples/wav/online-speech-enhancement-voxlock
+          if-no-files-found: warn
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: online-speech-enhancement-voxlock-with-voice-sample-${{ matrix.os }}
+          path: swift-api-examples/wav/online-speech-enhancement-voxlock-with-voice-sample
+          if-no-files-found: warn

@@ -4,6 +4,7 @@
 
 #include "sherpa-onnx/csrc/math.h"
 
+#include <cmath>
 #include <vector>
 
 #include "gtest/gtest.h"
@@ -34,6 +35,62 @@ TEST(Transpose, Case2) {
   // 1 3 5
   std::vector<float> expected_out = {0, 2, 4, 1, 3, 5};
   EXPECT_EQ(out, expected_out);
+}
+
+TEST(Softmax, Case1) {
+  std::vector<float> in = {1.0f, 2.0f, 3.0f};
+  Softmax(in.data(), static_cast<int32_t>(in.size()));
+
+  float sum = 0.0f;
+  for (float v : in) sum += v;
+  EXPECT_NEAR(sum, 1.0f, 1e-6f);
+  EXPECT_LT(in[0], in[1]);
+  EXPECT_LT(in[1], in[2]);
+}
+
+TEST(Softmax, Case2LargeLogits) {
+  std::vector<float> in = {1000.0f, 999.0f, 998.0f};
+  Softmax(in.data(), static_cast<int32_t>(in.size()));
+
+  float sum = 0.0f;
+  for (float v : in) {
+    EXPECT_FALSE(std::isnan(v));
+    EXPECT_FALSE(std::isinf(v));
+    sum += v;
+  }
+  EXPECT_NEAR(sum, 1.0f, 1e-6f);
+  EXPECT_GT(in[0], in[1]);
+  EXPECT_GT(in[1], in[2]);
+}
+
+TEST(Softmax, Case3Batched) {
+  std::vector<float> in = {1.0f, 2.0f, 3.0f, 0.0f, 0.0f, 0.0f};
+  Softmax(in.data(), 3, 2);
+
+  float row0 = in[0] + in[1] + in[2];
+  float row1 = in[3] + in[4] + in[5];
+  EXPECT_NEAR(row0, 1.0f, 1e-6f);
+  EXPECT_NEAR(row1, 1.0f, 1e-6f);
+  // Uniform input -> uniform output.
+  EXPECT_NEAR(in[3], 1.0f / 3.0f, 1e-6f);
+  EXPECT_NEAR(in[4], 1.0f / 3.0f, 1e-6f);
+  EXPECT_NEAR(in[5], 1.0f / 3.0f, 1e-6f);
+}
+
+TEST(Softmax, Case4InvalidInput1D) {
+  float stub = 0.0f;
+  EXPECT_FALSE(Softmax<float>(nullptr, 3));
+  EXPECT_FALSE(Softmax(&stub, 0));
+  EXPECT_FALSE(Softmax(&stub, -1));
+}
+
+TEST(Softmax, Case5InvalidInput2D) {
+  float stub = 0.0f;
+  EXPECT_FALSE(Softmax<float>(nullptr, 3, 2));
+  EXPECT_FALSE(Softmax(&stub, 0, 2));
+  EXPECT_FALSE(Softmax(&stub, 3, 0));
+  EXPECT_FALSE(Softmax(&stub, -1, 2));
+  EXPECT_FALSE(Softmax(&stub, 3, -1));
 }
 
 TEST(ScaleAdd, Case1) {
@@ -134,6 +191,64 @@ TEST(ComputeMeanAndInvStd, Case1) {
   for (int32_t i = 0; i < num_cols; ++i) {
     EXPECT_NEAR(mean[i], expected_mean[i], 1e-6f) << "at index " << i;
     EXPECT_NEAR(inv_std[i], expected_inv_std[i], 1e-6f) << "at index " << i;
+  }
+}
+
+TEST(NemoNormalizePerFeature, NearConstantFeatureStaysBounded) {
+  // A feature pinned at a constant log floor with one slightly-off frame,
+  // as produced by a mel bin with no energy. E[x^2] - E[x]^2 cancels to 0
+  // in float32 here, which used to normalize the off-floor frame to
+  // magnitudes in the thousands (7510 with these exact values).
+  int32_t num_frames = 1000;
+  int32_t feature_dim = 2;
+  std::vector<float> x(num_frames * feature_dim);
+  for (int32_t i = 0; i < num_frames; ++i) {
+    x[i * feature_dim] = -15.94f;
+    x[i * feature_dim + 1] = static_cast<float>(i % 7);
+  }
+  x[(num_frames / 2) * feature_dim] = -15.94f + 0.075f;
+
+  NemoNormalizePerFeature(x.data(), num_frames, feature_dim);
+
+  for (int32_t i = 0; i < num_frames; ++i) {
+    EXPECT_LE(std::fabs(x[i * feature_dim]), 100.0f) << "at frame " << i;
+  }
+}
+
+TEST(NemoNormalizePerFeature, ConstantFeatureNormalizesToZero) {
+  int32_t num_frames = 8;
+  int32_t feature_dim = 1;
+  std::vector<float> x(num_frames, 3.5f);
+
+  NemoNormalizePerFeature(x.data(), num_frames, feature_dim);
+
+  for (int32_t i = 0; i < num_frames; ++i) {
+    EXPECT_NEAR(x[i], 0.0f, 1e-6f) << "at frame " << i;
+  }
+}
+
+TEST(NemoNormalizePerFeature, SampleVariance) {
+  std::vector<float> x{1.0f, 2.0f, 3.0f};
+  NemoNormalizePerFeature(x.data(), 3, 1, true);
+  EXPECT_NEAR(x[0], -1.0f, 2e-5f);
+  EXPECT_NEAR(x[1], 0.0f, 1e-6f);
+  EXPECT_NEAR(x[2], 1.0f, 2e-5f);
+}
+
+TEST(NemoNormalizePerFeature, SingleFrameSampleVariance) {
+  std::vector<float> x{3.0f, -2.0f};
+  NemoNormalizePerFeature(x.data(), 1, 2, true);
+  EXPECT_EQ(x[0], 0.0f);
+  EXPECT_EQ(x[1], 0.0f);
+}
+
+TEST(NemoNormalizePerFeature, ConstantLogFloorSampleVariance) {
+  for (int32_t frames : {112, 672}) {
+    std::vector<float> x(frames * 2, -15.94f);
+    NemoNormalizePerFeature(x.data(), frames, 2, true);
+    for (float value : x) {
+      EXPECT_EQ(value, 0.0f);
+    }
   }
 }
 

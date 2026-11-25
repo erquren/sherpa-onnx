@@ -27,6 +27,16 @@ namespace sherpa_onnx {
  */
 bool FileExists(const std::string &filename);
 
+#if __ANDROID_API__ >= 9
+// filename is relative to the asset root.
+bool FileExists(AAssetManager *mgr, const std::string &filename);
+#endif
+
+#if __OHOS__
+// filename is relative to the raw file root.
+bool FileExists(NativeResourceManager *mgr, const std::string &filename);
+#endif
+
 /** Abort if the file does not exist.
  *
  * @param filename The file to check.
@@ -45,6 +55,12 @@ std::vector<char> ReadFile(NativeResourceManager *mgr,
 #endif
 
 std::string ResolveAbsolutePath(const std::string &path);
+
+std::ifstream OpenInputFile(const std::string &filename,
+                            std::ios_base::openmode mode = std::ios_base::in);
+
+std::ofstream OpenOutputFile(const std::string &filename,
+                             std::ios_base::openmode mode = std::ios_base::out);
 
 }  // namespace sherpa_onnx
 

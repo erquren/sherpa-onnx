@@ -8,6 +8,14 @@ on:
       - 'v[0-9]+.[0-9]+.[0-9]+*'
     paths:
       - '.github/workflows/windows-arm64.yaml'
+      - '.github/scripts/test-online-transducer.sh'
+      - '.github/scripts/test-online-paraformer.sh'
+      - '.github/scripts/test-offline-cohere-transcribe.sh'
+      # - '.github/scripts/test-offline-diacritization.sh'
+      - '.github/scripts/test-offline-transducer.sh'
+      - '.github/scripts/test-offline-ctc.sh'
+      - '.github/scripts/test-online-ctc.sh'
+      - '.github/scripts/test-offline-tts.sh'
       - 'cmake/**'
       - 'sherpa-onnx/csrc/*'
 
@@ -24,7 +32,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        os: [windows-2022]
+        os: [windows-11-arm]
         build_type: [Release, Debug, MinSizeRel, RelWithDebInfo]
         shared_lib: [ON, OFF]
         with_tts: [ON, OFF]
@@ -35,6 +43,25 @@ jobs:
         with:
           fetch-depth: 0
 
+      - name: Update version
+        shell: bash
+        run: |
+          ./new-release.sh
+          git diff .
+
+      - name: Free disk space
+        shell: bash
+        run: |
+          # The Debug/RelWithDebInfo matrix jobs ran out of disk while
+          # linking (LNK1180/LNK1116 error 112). The .pdb/.ilk debug info
+          # is large; drop the debugging/development toolchains this job
+          # never uses to make room for it.
+          rm -rf /c/Android "/c/Program Files/Android" "/c/Program Files (x86)/Android"
+          rm -rf /c/ghcup /c/mingw64 /c/Miniconda /c/Strawberry /c/R
+          rm -rf "/c/Program Files/LLVM" "/c/Program Files/MongoDB"
+          rm -rf "/c/Program Files/MySQL" "/c/Program Files/dotnet"
+          df -h .
+
       - name: Set up MSVC
         uses: ilammy/msvc-dev-cmd@v1
 
@@ -43,16 +70,13 @@ jobs:
         run: |
           which dumpbin
 
-      - name: Update version
-        shell: bash
-        run: |
-          ./new-release.sh
-          git diff .
-
       - name: Configure CMake
         shell: bash
         run: |
           mkdir build
+
+          cmake --version
+
           cd build
           cmake \
             -A ARM64 \
@@ -62,7 +86,6 @@ jobs:
             -D SHERPA_ONNX_ENABLE_PORTAUDIO=OFF \
             -D BUILD_SHARED_LIBS=${{ matrix.shared_lib }} \
             -D CMAKE_INSTALL_PREFIX=./install \
-            -D BUILD_ESPEAK_NG_EXE=OFF \
             ..
 
       - name: Check 1
@@ -107,6 +130,9 @@ jobs:
         shell: bash
         run: |
           cd build
+
+          cmake --version
+
           cmake --build . --config ${{ matrix.build_type }} -- -m:2
           cmake --build . --config ${{ matrix.build_type }} --target install -- -m:2
 
@@ -184,8 +210,6 @@ jobs:
           fi
 
           rm -rf $dst/lib/pkgconfig
-          rm -f $dst/lib/cargs.dll $dst/lib/cargs.lib $dst/lib/cargs.h
-          rm -f $dst/include/cargs.h
 
           ls -lh $dst/bin/
           echo "---"
@@ -198,10 +222,8 @@ jobs:
           if [[ $shared_lib == "ON" ]]; then
             cp -av build/install/lib/*.dll ${lib_dst}/lib/
             cp -av build/install/lib/*.lib ${lib_dst}/lib/
-            rm -f ${lib_dst}/lib/cargs.dll ${lib_dst}/lib/cargs.lib
           else
             cp -av build/install/lib/*.lib ${lib_dst}/lib/
-            rm -f ${lib_dst}/lib/cargs.lib
           fi
           ls -lh ${lib_dst}/lib/
           tar cjvf ${lib_dst}.tar.bz2 ${lib_dst}
@@ -209,6 +231,15 @@ jobs:
           ls -lh $dst/
 
           ls -lh *.tar.bz2
+
+          # The PDB debug symbols (~200 MB each) are already inside the release
+          # tarballs above. The loose copies in build/ and build/install are only
+          # needed for debugging a crash locally, not for running CI tests, so
+          # drop them here to free several GB for the publish/test steps below.
+          rm -f build/bin/${{ matrix.build_type }}/*.pdb
+          rm -f build/install/bin/*.pdb
+          echo "Freed PDB files. Disk now:"
+          df -h .
 
       # https://huggingface.co/docs/hub/spaces-github-actions
       - name: Publish to huggingface
@@ -244,6 +275,12 @@ jobs:
 
             git push https://csukuangfj2:$HF_TOKEN@huggingface.co/csukuangfj2/sherpa-onnx-libs main
 
+      - name: Get sherpa-onnx version
+        shell: bash
+        run: |
+          SHERPA_ONNX_VERSION=v$(grep "SHERPA_ONNX_VERSION" ./CMakeLists.txt | cut -d " " -f 2 | cut -d '"' -f 2)
+          echo "SHERPA_ONNX_VERSION=$SHERPA_ONNX_VERSION" >> "$GITHUB_ENV"
+          echo "SHERPA_ONNX_VERSION: $SHERPA_ONNX_VERSION"
       - name: Release pre-compiled binaries and libs for Windows arm64
         if: github.repository_owner == 'csukuangfj' && github.event_name == 'push' && contains(github.ref, 'refs/tags/')
         uses: svenstaro/upload-release-action@v2
@@ -253,7 +290,7 @@ jobs:
           file: sherpa-onnx-*-win-arm64*.tar.bz2
           repo_name: k2-fsa/sherpa-onnx
           repo_token: ${{ secrets.UPLOAD_GH_SHERPA_ONNX_TOKEN }}
-          tag: v1.12.28
+          tag: ${{ env.SHERPA_ONNX_VERSION }}
 
       - name: Release pre-compiled binaries and libs for Windows arm64
         if: github.repository_owner == 'k2-fsa'&& github.event_name == 'push' && contains(github.ref, 'refs/tags/')
@@ -262,3 +299,246 @@ jobs:
           file_glob: true
           overwrite: true
           file: sherpa-onnx-*-win-arm64*.tar.bz2
+
+      # The release artifacts, the huggingface clone and the RelWithDebInfo/Debug
+      # PDB files are no longer needed once we get here (the Release steps above
+      # are tag-only and are skipped for branch builds). Windows arm64 runners
+      # have limited disk, and the tests below each download large ASR models,
+      # so free that space first or the model extraction fails with "no space
+      # left on device". Only the test binaries in build/bin/<build_type> and
+      # the shared libs they load are kept.
+      - name: Free disk space before tests
+        if: ${{ !startsWith(github.ref, 'refs/tags/') }}
+        shell: bash
+        run: |
+          echo "Disk space before cleanup:"
+          df -h .
+          rm -rf huggingface
+          rm -rf sherpa-onnx-*-win-arm64*/
+          rm -f sherpa-onnx-*-win-arm64*.tar.bz2
+          rm -f build/bin/${{ matrix.build_type }}/*.pdb
+          rm -f build/install/bin/*.pdb
+          rm -rf build/install/share build/install/lib/pkgconfig
+          echo "Disk space after cleanup:"
+          df -h .
+
+      - name: Test fa
+        if: ${{ !startsWith(github.ref, 'refs/tags/') }}
+        shell: bash
+        run: |
+          export PATH=$PWD/build/bin/${{ matrix.build_type }}:$PATH
+
+          .github/scripts/test-fa.sh
+
+      - name: Show fa result zh-aishell3-pinyin
+        if: ${{ !startsWith(github.ref, 'refs/tags/') }}
+        shell: bash
+        run: cat zh-aishell3-pinyin.TextGrid
+
+      - name: Show fa result zh-biaobei-pinyin
+        if: ${{ !startsWith(github.ref, 'refs/tags/') }}
+        shell: bash
+        run: cat zh-biaobei-pinyin.TextGrid
+
+      - name: Show fa result zh-large-pinyin
+        if: ${{ !startsWith(github.ref, 'refs/tags/') }}
+        shell: bash
+        run: cat zh-large-pinyin.TextGrid
+
+      - name: Show fa result english-mfa-v2.2.1
+        if: ${{ !startsWith(github.ref, 'refs/tags/') }}
+        shell: bash
+        run: cat english-mfa-v2.2.1.TextGrid
+
+      - name: Show fa result english-mfa-v3.0.0
+        if: ${{ !startsWith(github.ref, 'refs/tags/') }}
+        shell: bash
+        run: cat english-mfa-v3.0.0.TextGrid
+
+      - name: Show fa result english-mfa-v3.1.0
+        if: ${{ !startsWith(github.ref, 'refs/tags/') }}
+        shell: bash
+        run: cat english-mfa-v3.1.0.TextGrid
+
+      - uses: actions/upload-artifact@v4
+        if: ${{ !startsWith(github.ref, 'refs/tags/') }}
+        with:
+          name: fa-textgrids-shared-${{ matrix.shared_lib }}-tts-${{ matrix.with_tts }}-static-crt-${{ matrix.use_static_crt }}-${{ matrix.build_type }}
+          path: |
+            ./*.TextGrid
+            ./*.wav
+
+      - name: Clean up fa files
+        if: ${{ !startsWith(github.ref, 'refs/tags/') }}
+        shell: bash
+        run: |
+          rm -rf zh-aishell3-pinyin zh-biaobei-pinyin zh-large-pinyin
+          rm -rf english-mfa-v2.2.1 english-mfa-v3.0.0 english-mfa-v3.1.0
+          rm -f ./*.TextGrid ./zh.wav ./en.wav
+      - name: Test offline Cohere Transcribe for windows arm64
+        if: ${{ !startsWith(github.ref, 'refs/tags/') }}
+        shell: bash
+        run: |
+          export PATH=$PWD/build/bin/${{ matrix.build_type }}:$PATH
+          export EXE=sherpa-onnx-offline.exe
+
+          .github/scripts/test-offline-cohere-transcribe.sh
+
+      - name: Test offline Moonshine for windows arm64
+        if: ${{ !startsWith(github.ref, 'refs/tags/') }}
+        shell: bash
+        run: |
+          export PATH=$PWD/build/bin/${{ matrix.build_type }}:$PATH
+          export EXE=sherpa-onnx-offline.exe
+
+          .github/scripts/test-offline-moonshine.sh
+
+      - name: Test C++ API
+        if: ${{ !startsWith(github.ref, 'refs/tags/') }}
+        shell: bash
+        run: |
+          export PATH=$PWD/build/bin/${{ matrix.build_type }}:$PATH
+          export CXX_STREAMING_ZIPFORMER_EXE=streaming-zipformer-cxx-api.exe
+          export CXX_WHISPER_EXE=whisper-cxx-api.exe
+          export CXX_SENSE_VOICE_EXE=sense-voice-cxx-api.exe
+
+          .github/scripts/test-cxx-api.sh
+
+      - name: Test offline speaker diarization
+        if: ${{ !startsWith(github.ref, 'refs/tags/') }}
+        shell: bash
+        run: |
+          export PATH=$PWD/build/bin/${{ matrix.build_type }}:$PATH
+          export EXE=sherpa-onnx-offline-speaker-diarization.exe
+
+          .github/scripts/test-speaker-diarization.sh
+
+      - name: Test online punctuation
+        if: ${{ !startsWith(github.ref, 'refs/tags/') }}
+        shell: bash
+        run: |
+          export PATH=$PWD/build/bin/${{ matrix.build_type }}:$PATH
+          export EXE=sherpa-onnx-online-punctuation.exe
+
+          .github/scripts/test-online-punctuation.sh
+
+      - name: Test offline punctuation
+        if: ${{ !startsWith(github.ref, 'refs/tags/') }}
+        shell: bash
+        run: |
+          export PATH=$PWD/build/bin/${{ matrix.build_type }}:$PATH
+          export EXE=sherpa-onnx-offline-punctuation.exe
+
+          .github/scripts/test-offline-punctuation.sh
+
+      # - name: Test offline diacritization
+      #   if: ${{ !startsWith(github.ref, 'refs/tags/') }}
+      #   shell: bash
+      #   run: |
+      #     export PATH=$PWD/build/bin/${{ matrix.build_type }}:$PATH
+      #     export EXE=sherpa-onnx-offline-diacritization.exe
+      #
+      #     .github/scripts/test-offline-diacritization.sh
+
+      - name: Test C API
+        if: ${{ !startsWith(github.ref, 'refs/tags/') }}
+        shell: bash
+        run: |
+          export PATH=$PWD/build/bin/${{ matrix.build_type }}:$PATH
+          export SLID_EXE=spoken-language-identification-c-api.exe
+          export SID_EXE=speaker-identification-c-api.exe
+          export AT_EXE=audio-tagging-c-api.exe
+          export PUNCT_EXE=add-punctuation-c-api.exe
+          export VERSION_EXE=version-c-api.exe
+
+          .github/scripts/test-c-api.sh
+
+      - name: Test Audio tagging
+        if: ${{ !startsWith(github.ref, 'refs/tags/') }}
+        shell: bash
+        run: |
+          export PATH=$PWD/build/bin/${{ matrix.build_type }}:$PATH
+          export EXE=sherpa-onnx-offline-audio-tagging.exe
+
+          .github/scripts/test-audio-tagging.sh
+
+      - name: Test spoken language identification (C++ API)
+        if: ${{ !startsWith(github.ref, 'refs/tags/') }}
+        shell: bash
+        run: |
+          export PATH=$PWD/build/bin/${{ matrix.build_type }}:$PATH
+          export EXE=sherpa-onnx-offline-language-identification.exe
+
+          .github/scripts/test-spoken-language-identification.sh
+
+      - name: Test online CTC
+        if: ${{ !startsWith(github.ref, 'refs/tags/') }}
+        shell: bash
+        run: |
+          export PATH=$PWD/build/bin/${{ matrix.build_type }}:$PATH
+          export EXE=sherpa-onnx.exe
+
+          .github/scripts/test-online-ctc.sh
+
+      - name: Test offline TTS
+        if: matrix.with_tts == 'ON' && !startsWith(github.ref, 'refs/tags/')
+        shell: bash
+        run: |
+          export PATH=$PWD/build/bin/${{ matrix.build_type }}:$PATH
+          export EXE=sherpa-onnx-offline-tts.exe
+
+          .github/scripts/test-offline-tts.sh
+
+      - name: Test online paraformer for windows arm64
+        if: ${{ !startsWith(github.ref, 'refs/tags/') }}
+        shell: bash
+        run: |
+          export PATH=$PWD/build/bin/${{ matrix.build_type }}:$PATH
+          export EXE=sherpa-onnx.exe
+
+          .github/scripts/test-online-paraformer.sh
+
+      - name: Test offline Whisper for windows arm64
+        if: ${{ !startsWith(github.ref, 'refs/tags/') }}
+        shell: bash
+        run: |
+          export PATH=$PWD/build/bin/${{ matrix.build_type }}:$PATH
+          export EXE=sherpa-onnx-offline.exe
+
+          .github/scripts/test-offline-whisper.sh
+
+      - name: Test offline CTC for windows arm64
+        if: ${{ !startsWith(github.ref, 'refs/tags/') }}
+        shell: bash
+        run: |
+          export PATH=$PWD/build/bin/${{ matrix.build_type }}:$PATH
+          export EXE=sherpa-onnx-offline.exe
+
+          .github/scripts/test-offline-ctc.sh
+
+      - name: Test offline transducer for Windows arm64
+        if: ${{ !startsWith(github.ref, 'refs/tags/') }}
+        shell: bash
+        run: |
+          export PATH=$PWD/build/bin/${{ matrix.build_type }}:$PATH
+          export EXE=sherpa-onnx-offline.exe
+
+          .github/scripts/test-offline-transducer.sh
+
+      - name: Test online transducer for Windows arm64
+        if: ${{ !startsWith(github.ref, 'refs/tags/') }}
+        shell: bash
+        run: |
+          export PATH=$PWD/build/bin/${{ matrix.build_type }}:$PATH
+          export EXE=sherpa-onnx.exe
+
+          .github/scripts/test-online-transducer.sh
+
+      - name: Test online transducer (C API)
+        if: ${{ !startsWith(github.ref, 'refs/tags/') }}
+        shell: bash
+        run: |
+          export PATH=$PWD/build/bin/${{ matrix.build_type }}:$PATH
+          export EXE=decode-file-c-api.exe
+
+          .github/scripts/test-online-transducer.sh

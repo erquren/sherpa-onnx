@@ -1,96 +1,189 @@
 #!/usr/bin/env bash
 
 set -ex
-
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+source "$SCRIPT_DIR/common.sh"
 cd rust-api-examples
 
 trap 'bash ../.github/scripts/show-rust-binary-info.sh --all || true' EXIT
 
-./run-cohere-transcribe.sh
-rm -rf sherpa-onnx-cohere-transcribe-*
+bash ./run-version.sh
 
-./run-qwen3-asr.sh
+bash ./run-forced-alignment-english.sh
+grep -q 'name = "phones"' en.TextGrid
+grep -q 'name = "words"' en.TextGrid
+cat en.TextGrid
+
+bash ./run-forced-alignment-chinese.sh
+grep -q 'name = "phones"' zh.TextGrid
+grep -q 'name = "words"' zh.TextGrid
+cat zh.TextGrid
+
+mkdir -p test-forced-alignment-english test-forced-alignment-chinese
+cp english-mfa-v3.1.0/en.wav test-forced-alignment-english/
+mv en.TextGrid test-forced-alignment-english/
+cp zh-aishell3-pinyin/zh.wav test-forced-alignment-chinese/
+mv zh.TextGrid test-forced-alignment-chinese/
+
+# The word clips need Python; skip them where it is missing (e.g. Termux).
+# The helper itself skips when soundfile is not installed. Termux calls the
+# interpreter `python`, most other platforms `python3`.
+if command -v python3 >/dev/null 2>&1; then
+  py=python3
+elif command -v python >/dev/null 2>&1; then
+  py=python
+else
+  py=
+fi
+
+if [ -n "$py" ]; then
+  $py ../python-api-examples/textgrid-to-word-wavs.py \
+    --wav test-forced-alignment-english/en.wav \
+    --textgrid test-forced-alignment-english/en.TextGrid \
+    --out-dir test-forced-alignment-english/word-clips-en
+  $py ../python-api-examples/textgrid-to-word-wavs.py \
+    --wav test-forced-alignment-chinese/zh.wav \
+    --textgrid test-forced-alignment-chinese/zh.TextGrid \
+    --out-dir test-forced-alignment-chinese/word-clips-zh
+else
+  echo "Python is not available; skipping the word clips"
+fi
+
+rm -rf english-mfa-v3.1.0 zh-aishell3-pinyin
+
+bash ./run-offline-speech-enhancement-voxlock.sh
+bash ./run-offline-speech-enhancement-voxlock-with-voice-sample.sh
+bash ./run-streaming-speech-enhancement-voxlock.sh
+bash ./run-streaming-speech-enhancement-voxlock-with-voice-sample.sh
+
+bash ./run-vits-en-lexicon.sh
+bash ./run-vits-en-phonemize.sh
+rm -rf vits-piper-en_US-amy-low
+rm -f lexicon-en-us.txt
+
+bash ./run-vits-de-phonemize.sh
+rm -rf vits-piper-de_DE-glados-high
+
+bash ./run-matcha-tts-en-lexicon.sh
+bash ./run-matcha-tts-en-phonemize.sh
+bash ./run-matcha-tts-zh-lexicon.sh
+rm -rf matcha-icefall-en_US-ljspeech matcha-icefall-zh-baker
+rm -f vocos-22khz-univ.onnx lexicon-en-us.txt
+
+bash ./run-kokoro-tts-en-lexicon.sh
+bash ./run-kokoro-tts-en-phonemize.sh
+rm -rf kokoro-en-v0_19
+rm -f lexicon-en-us.txt
+
+bash ./run-kokoro-tts-zh-en-lexicon.sh
+rm -rf kokoro-multi-lang-v1_0
+
+bash ./run-kitten-tts-en-lexicon.sh
+bash ./run-kitten-tts-en-phonemize.sh
+rm -rf kitten-nano-en-v0_1-fp16
+rm -f lexicon-en-us.txt
+
+bash ./run-pocket-tts.sh
+rm -rf sherpa-onnx-pocket-*
+
+bash ./run-supertonic-tts.sh
+rm -rf sherpa-onnx-supertonic-*
+
+bash ./run-zipvoice-tts-lexicon.sh
+rm -rf sherpa-onnx-zipvoice-*
+rm -f vocos_24khz.onnx lexicon-en-us.txt
+
+bash ./run-qwen3-asr.sh
 rm -rf sherpa-onnx-qwen3-*
 
-./run-audio-tagging-zipformer.sh
+bash ./run-funasr-nano.sh
+rm -rf sherpa-onnx-funasr-nano-*
+
+bash ./run-audio-tagging-zipformer.sh
 rm -rf sherpa-onnx-zipformer-small-audio-tagging-2024-04-15
 
-./run-audio-tagging-ced.sh
+bash ./run-audio-tagging-ced.sh
 rm -rf sherpa-onnx-ced-mini-audio-tagging-2024-04-19
 
-./run-speaker-embedding-extractor.sh
-./run-speaker-embedding-manager.sh
+bash ./run-speaker-embedding-extractor.sh
+bash ./run-speaker-embedding-manager.sh
 rm -f 3dspeaker_speech_campplus_sv_zh-cn_16k-common.onnx
 rm -rf sr-data
 
-./run-speaker-embedding-cosine-similarity.sh
+bash ./run-speaker-embedding-cosine-similarity.sh
 rm -f wespeaker_zh_cnceleb_resnet34.onnx fangjun-sr-1.wav fangjun-sr-2.wav leijun-sr-1.wav
 
-./run-offline-speaker-diarization.sh
+bash ./run-offline-speaker-diarization.sh
 rm -rf sherpa-onnx-pyannote-segmentation-3-0
 rm -f 3dspeaker_speech_eres2net_base_sv_zh-cn_3dspeaker_16k.onnx 0-four-speakers-zh.wav
 
-./run-vits-en.sh
-rm -rf vits-piper-en_US-amy-low
-
-./run-vits-de.sh
-rm -rf vits-piper-de_DE-glados-high
-
-./run-matcha-tts-en.sh
-./run-matcha-tts-zh.sh
-rm -rf matcha-icefall-en_US-ljspeech matcha-icefall-zh-baker
-rm -f vocos-22khz-univ.onnx
-
-./run-kokoro-tts-en.sh
-rm -rf kokoro-en-v0_19
-
-./run-kokoro-tts-zh-en.sh
-rm -rf kokoro-multi-lang-v1_0
-
-./run-kitten-tts-en.sh
-rm -rf kitten-nano-en-v0_1-fp16
-
-./run-pocket-tts.sh
-rm -rf sherpa-onnx-pocket-*
-
-./run-supertonic-tts.sh
-rm -rf sherpa-onnx-supertonic-*
-
-./run-zipvoice-tts.sh
-rm -rf sherpa-onnx-zipvoice-*
-rm -f vocos_24khz.onnx
-
-./run-online-punctuation.sh
+bash ./run-online-punctuation.sh
 rm -rf sherpa-onnx-online-punct-*
 
-./run-keyword-spotter.sh
+bash ./run-keyword-spotter.sh
 rm -rf sherpa-onnx-kws-zipformer-wenetspeech-3.3M-2024-01-01-mobile
 
-./run-spoken-language-identification.sh
+bash ./run-spoken-language-identification.sh
+bash ./run-whisper.sh
 rm -rf sherpa-onnx-whisper-tiny spoken-language-identification-test-wavs
 
-./run-offline-punctuation.sh
+bash ./run-offline-punctuation.sh
 rm -rf sherpa-onnx-punct-ct-transformer-zh-en-vocab272727-2024-04-12-int8
 
-./run-version.sh
+bash ./run-moonshine-v2.sh
 
-./run-moonshine-v2.sh
+bash ./run-fire-red-asr-ctc.sh
 
-./run-fire-red-asr-ctc.sh
+bash ./run-paraformer.sh
+rm -rf sherpa-onnx-paraformer-zh-small-2024-03-09
 
-./run-silero-vad-remove-silence.sh
+bash ./run-medasr-ctc.sh
+rm -rf sherpa-onnx-medasr-ctc-en-int8-2025-12-25
 
-./run-nemo-parakeet-en.sh
-./run-zipformer-vi.sh
-./run-zipformer-zh-en.sh
-./run-zipformer-en.sh
+bash ./run-telespeech-ctc.sh
+rm -rf sherpa-onnx-telespeech-ctc-int8-zh-2024-06-04
 
-./run-sense-voice.sh
+bash ./run-omnilingual-asr-ctc.sh
+rm -rf sherpa-onnx-omnilingual-asr-1600-languages-300M-ctc-int8-2025-11-12
 
-./run-streaming-zipformer-en.sh
-./run-streaming-zipformer-zh-en.sh
+bash ./run-silero-vad-remove-silence.sh
 
-./run-offline-speech-enhancement-gtcrn.sh
-./run-offline-speech-enhancement-dpdfnet.sh
-./run-streaming-speech-enhancement-gtcrn.sh
-./run-streaming-speech-enhancement-dpdfnet.sh
+bash ./run-ten-vad-remove-silence.sh
+
+bash ./run-nemo-parakeet-en.sh
+bash ./run-zipformer-vi.sh
+bash ./run-zipformer-zh-en.sh
+bash ./run-zipformer-en.sh
+bash ./run-zipformer-ctc-hlg.sh
+rm -rf sherpa-onnx-zipformer-ctc-en-2023-10-02
+
+bash ./run-sense-voice.sh
+
+bash ./run-streaming-zipformer-en.sh
+bash ./run-streaming-zipformer-zh-en.sh
+bash ./run-streaming-paraformer.sh
+rm -rf sherpa-onnx-streaming-paraformer-bilingual-zh-en
+bash ./run-streaming-zipformer-ctc-hlg.sh
+rm -rf sherpa-onnx-streaming-zipformer-ctc-small-2024-03-18
+bash ./run-streaming-t-one-ctc.sh
+rm -rf sherpa-onnx-streaming-t-one-russian-2025-09-08
+
+bash ./run-offline-speech-enhancement-gtcrn.sh
+bash ./run-offline-speech-enhancement-dpdfnet.sh
+bash ./run-streaming-speech-enhancement-gtcrn.sh
+bash ./run-streaming-speech-enhancement-dpdfnet.sh
+
+# The cohere encoder ships a 2.6G external-data file that does not fit 32-bit
+# platforms: ORT cannot parse its offsets ("Failed to parse value") and the
+# model cannot load in a 32-bit address space anyway. The example stays covered
+# by the 64-bit jobs. (uname -m because getconf is not available everywhere,
+# e.g. Termux.)
+case "$(uname -m)" in
+  armv7* | armv8l | i386 | i486 | i586 | i686 | x86)
+    echo "Skipping run-cohere-transcribe.sh on 32-bit platforms"
+    ;;
+  *)
+    bash ./run-cohere-transcribe.sh
+    rm -rf sherpa-onnx-cohere-transcribe-*
+    ;;
+esac

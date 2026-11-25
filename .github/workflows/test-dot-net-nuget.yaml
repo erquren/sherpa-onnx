@@ -3,15 +3,6 @@ name: test-dot-net-nuget
 on:
   workflow_dispatch:
 
-  schedule:
-    # minute (0-59)
-    # hour (0-23)
-    # day of the month (1-31)
-    # month (1-12)
-    # day of the week (0-6)
-    # nightly build at 23:50 UTC time every day
-    - cron: "50 23 * * *"
-
 concurrency:
   group: test-dot-net-nuget-${{ github.ref }}
   cancel-in-progress: true
@@ -82,10 +73,12 @@ jobs:
         run: |
           df -h
 
-      - name: Setup .NET 10.0
+      - name: Setup .NET
         uses: actions/setup-dotnet@v4
         with:
-          dotnet-version: 10.0.x
+          dotnet-version: |
+            8.0.x
+            10.0.x
 
       - name: Check dotnet
         run: dotnet --info
@@ -95,7 +88,94 @@ jobs:
         run: |
           .github/scripts/test-dot-net.sh
 
+      - name: Show fa result english-mfa-v3.1.0
+        shell: bash
+        run: cat dotnet-examples/forced-alignment-english/en.TextGrid
+
+      - name: Show fa result zh-aishell3-pinyin
+        shell: bash
+        run: cat dotnet-examples/forced-alignment-chinese/zh.TextGrid
+
+      - name: Setup Python
+        uses: actions/setup-python@v7
+        with:
+          python-version: "3.12"
+
+      - name: Extract word wavs from the TextGrids
+        shell: bash
+        run: |
+          # the test wavs live inside the model packages; download them next
+          # to the TextGrids for the extraction below
+          curl -SL -O https://github.com/k2-fsa/sherpa-onnx/releases/download/fa-models/english-mfa-v3.1.0.tar.bz2
+          tar xvf english-mfa-v3.1.0.tar.bz2 english-mfa-v3.1.0/en.wav
+          mv english-mfa-v3.1.0/en.wav dotnet-examples/forced-alignment-english/en.wav
+          rm -rf english-mfa-v3.1.0 english-mfa-v3.1.0.tar.bz2
+
+          curl -SL -O https://github.com/k2-fsa/sherpa-onnx/releases/download/fa-models/zh-aishell3-pinyin.tar.bz2
+          tar xvf zh-aishell3-pinyin.tar.bz2 zh-aishell3-pinyin/zh.wav
+          mv zh-aishell3-pinyin/zh.wav dotnet-examples/forced-alignment-chinese/zh.wav
+          rm -rf zh-aishell3-pinyin zh-aishell3-pinyin.tar.bz2
+
+          python3 -m pip install soundfile
+          python3 ./python-api-examples/textgrid-to-word-wavs.py \
+            --wav dotnet-examples/forced-alignment-english/en.wav \
+            --textgrid dotnet-examples/forced-alignment-english/en.TextGrid \
+            --out-dir word-clips-en
+          python3 ./python-api-examples/textgrid-to-word-wavs.py \
+            --wav dotnet-examples/forced-alignment-chinese/zh.wav \
+            --textgrid dotnet-examples/forced-alignment-chinese/zh.TextGrid \
+            --out-dir word-clips-zh
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: fa-textgrids-english-mfa-v3.1.0-${{ matrix.os }}
+          path: dotnet-examples/forced-alignment-english/en.TextGrid
+          if-no-files-found: warn
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: fa-textgrids-zh-aishell3-pinyin-${{ matrix.os }}
+          path: dotnet-examples/forced-alignment-chinese/zh.TextGrid
+          if-no-files-found: warn
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: fa-word-clips-english-mfa-v3.1.0-${{ matrix.os }}
+          path: ./word-clips-en
+          if-no-files-found: warn
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: fa-word-clips-zh-aishell3-pinyin-${{ matrix.os }}
+          path: ./word-clips-zh
+          if-no-files-found: warn
+
       - uses: actions/upload-artifact@v4
         with:
           name: dot-net-tts-generated-test-files-${{ matrix.os }}
           path: tts
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: speech-enhancement-voxlock-${{ matrix.os }}
+          # each example dir keeps its input and output wavs
+          path: dotnet-examples/speech-enhancement-voxlock/*.wav
+          if-no-files-found: warn
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: speech-enhancement-voxlock-with-voice-sample-${{ matrix.os }}
+          path: dotnet-examples/speech-enhancement-voxlock-with-voice-sample/*.wav
+          if-no-files-found: warn
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: streaming-speech-enhancement-voxlock-${{ matrix.os }}
+          path: dotnet-examples/streaming-speech-enhancement-voxlock/*.wav
+          if-no-files-found: warn
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: streaming-speech-enhancement-voxlock-with-voice-sample-${{ matrix.os }}
+          path: dotnet-examples/streaming-speech-enhancement-voxlock-with-voice-sample/*.wav
+          if-no-files-found: warn

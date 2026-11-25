@@ -3,7 +3,6 @@
 // Copyright (c)  2024  Xiaomi Corporation
 
 #include "sherpa-onnx/csrc/hifigan-vocoder.h"
-#include "sherpa-onnx/csrc/ort-env.h"
 
 #include <memory>
 #include <string>
@@ -31,7 +30,7 @@ class HifiganVocoder::Impl {
  public:
   explicit Impl(int32_t num_threads, const std::string &provider,
                 const std::string &model)
-      : env_(CreateOrtEnv()),
+      : env_(ORT_LOGGING_LEVEL_ERROR),
         sess_opts_(GetSessionOptions(num_threads, provider)),
         allocator_{} {
     sess_ = std::make_unique<Ort::Session>(
@@ -42,7 +41,7 @@ class HifiganVocoder::Impl {
   template <typename Manager>
   explicit Impl(Manager *mgr, int32_t num_threads, const std::string &provider,
                 const std::string &model)
-      : env_(CreateOrtEnv()),
+      : env_(ORT_LOGGING_LEVEL_ERROR),
         sess_opts_(GetSessionOptions(num_threads, provider)),
         allocator_{} {
     auto buf = ReadFile(mgr, model);
@@ -66,6 +65,8 @@ class HifiganVocoder::Impl {
     return {p, p + total};
   }
 
+  int32_t SampleRate() const { return sample_rate_; }
+
  private:
   void Init(void *model_data, size_t model_data_length) {
     if (model_data) {
@@ -81,9 +82,13 @@ class HifiganVocoder::Impl {
     GetInputNames(sess_.get(), &input_names_, &input_names_ptr_);
 
     GetOutputNames(sess_.get(), &output_names_, &output_names_ptr_);
+
+    Ort::ModelMetadata meta_data = sess_->GetModelMetadata();
+    Ort::AllocatorWithDefaultOptions allocator;
+    SHERPA_ONNX_READ_META_DATA_WITH_DEFAULT(sample_rate_, "sample_rate", 22050);
   }
 
- private:
+  int32_t sample_rate_ = 22050;
   Ort::Env env_;
   Ort::SessionOptions sess_opts_;
   Ort::AllocatorWithDefaultOptions allocator_;
@@ -112,6 +117,8 @@ HifiganVocoder::~HifiganVocoder() = default;
 std::vector<float> HifiganVocoder::Run(Ort::Value mel) const {
   return impl_->Run(std::move(mel));
 }
+
+int32_t HifiganVocoder::SampleRate() const { return impl_->SampleRate(); }
 
 #if __ANDROID_API__ >= 9
 template HifiganVocoder::HifiganVocoder(AAssetManager *mgr, int32_t num_threads,

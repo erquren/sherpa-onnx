@@ -3,7 +3,6 @@
 // Copyright (c)  2025  Xiaomi Corporation
 
 #include "sherpa-onnx/csrc/offline-omnilingual-asr-ctc-model.h"
-#include "sherpa-onnx/csrc/ort-env.h"
 
 #include <algorithm>
 #include <cmath>
@@ -35,7 +34,7 @@ class OfflineOmnilingualAsrCtcModel::Impl {
  public:
   explicit Impl(const OfflineModelConfig &config)
       : config_(config),
-        env_(CreateOrtEnv()),
+        env_(ORT_LOGGING_LEVEL_ERROR),
         sess_opts_(GetSessionOptions(config)),
         allocator_{} {
     sess_ = std::make_unique<Ort::Session>(
@@ -46,7 +45,7 @@ class OfflineOmnilingualAsrCtcModel::Impl {
   template <typename Manager>
   Impl(Manager *mgr, const OfflineModelConfig &config)
       : config_(config),
-        env_(CreateOrtEnv()),
+        env_(ORT_LOGGING_LEVEL_ERROR),
         sess_opts_(GetSessionOptions(config)),
         allocator_{} {
     auto buf = ReadFile(mgr, config_.omnilingual.model);
@@ -90,7 +89,10 @@ class OfflineOmnilingualAsrCtcModel::Impl {
     // Map the single-row feature vector
     Eigen::Map<Eigen::ArrayXf> x(features, feat_dim);
     float mean = x.mean();
-    float var = (x.square().mean() - mean * mean);
+    // E[x^2] - E[x]^2 cancels catastrophically in float32 when a feature
+    // stays near a constant value, so compute the variance from centered
+    // values instead.
+    float var = (x - mean).square().mean();
     var = std::max(var, 0.0f);
     float inv_stddev = 1.0f / std::sqrt(var + 1e-5f);
 

@@ -68,11 +68,29 @@ Java_com_k2fsa_sherpa_onnx_OnlinePunctuation_newFromAsset(JNIEnv *env,
 
   SHERPA_ONNX_LOGE("config:\n%s", config.ToString().c_str());
 
-  auto model = new sherpa_onnx::OnlinePunctuation(
 #if __ANDROID_API__ >= 9
-      mgr,
+  if (!config.Validate(mgr)) {
+    SHERPA_ONNX_LOGE("Errors found in config!");
+    return 0;
+  }
+#else
+  if (!config.Validate()) {
+    SHERPA_ONNX_LOGE("Errors found in config!");
+    return 0;
+  }
 #endif
-      config);
+
+  sherpa_onnx::OnlinePunctuation *model = nullptr;
+  try {
+    model = new sherpa_onnx::OnlinePunctuation(
+#if __ANDROID_API__ >= 9
+        mgr,
+#endif
+        config);
+  } catch (const std::exception &e) {
+    RethrowCxxExceptionAsJava(env, e, "Failed to create OnlinePunctuation");
+    return 0;
+  }
 
   return (jlong)model;
 }
@@ -97,7 +115,13 @@ Java_com_k2fsa_sherpa_onnx_OnlinePunctuation_newFromFile(JNIEnv *env,
     return 0;
   }
 
-  auto model = new sherpa_onnx::OnlinePunctuation(config);
+  sherpa_onnx::OnlinePunctuation *model = nullptr;
+  try {
+    model = new sherpa_onnx::OnlinePunctuation(config);
+  } catch (const std::exception &e) {
+    RethrowCxxExceptionAsJava(env, e, "Failed to create OnlinePunctuation");
+    return 0;
+  }
 
   return (jlong)model;
 }

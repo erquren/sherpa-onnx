@@ -63,11 +63,29 @@ Java_com_k2fsa_sherpa_onnx_OfflinePunctuation_newFromAsset(
 
   SHERPA_ONNX_LOGE("config:\n%s", config.ToString().c_str());
 
-  auto model = new sherpa_onnx::OfflinePunctuation(
 #if __ANDROID_API__ >= 9
-      mgr,
+  if (!config.Validate(mgr)) {
+    SHERPA_ONNX_LOGE("Errors found in config!");
+    return 0;
+  }
+#else
+  if (!config.Validate()) {
+    SHERPA_ONNX_LOGE("Errors found in config!");
+    return 0;
+  }
 #endif
-      config);
+
+  sherpa_onnx::OfflinePunctuation *model = nullptr;
+  try {
+    model = new sherpa_onnx::OfflinePunctuation(
+#if __ANDROID_API__ >= 9
+        mgr,
+#endif
+        config);
+  } catch (const std::exception &e) {
+    RethrowCxxExceptionAsJava(env, e, "Failed to create OfflinePunctuation");
+    return 0;
+  }
 
   return (jlong)model;
 }
@@ -92,7 +110,13 @@ Java_com_k2fsa_sherpa_onnx_OfflinePunctuation_newFromFile(JNIEnv *env,
     return 0;
   }
 
-  auto model = new sherpa_onnx::OfflinePunctuation(config);
+  sherpa_onnx::OfflinePunctuation *model = nullptr;
+  try {
+    model = new sherpa_onnx::OfflinePunctuation(config);
+  } catch (const std::exception &e) {
+    RethrowCxxExceptionAsJava(env, e, "Failed to create OfflinePunctuation");
+    return 0;
+  }
 
   return (jlong)model;
 }

@@ -7,11 +7,13 @@ set(srcs
   display.cc
   endpoint.cc
   features.cc
+  forced-aligner.cc
   homophone-replacer.cc
   keyword-spotter.cc
   offline-canary-model-config.cc
   offline-cohere-transcribe-model-config.cc
   offline-ctc-fst-decoder-config.cc
+  offline-diacritization.cc
   offline-dolphin-model-config.cc
   offline-fire-red-asr-ctc-model-config.cc
   offline-fire-red-asr-model-config.cc
@@ -34,10 +36,12 @@ set(srcs
   offline-speech-denoiser-dpdfnet-model-config.cc
   offline-speech-denoiser-gtcrn-model-config.cc
   offline-speech-denoiser-model-config.cc
+  offline-speech-denoiser-voxlock-model-config.cc
   offline-speech-denoiser.cc
   offline-stream.cc
   offline-tdnn-model-config.cc
   offline-transducer-model-config.cc
+  offline-w2v-bert-ctc-model-config.cc
   offline-wenet-ctc-model-config.cc
   offline-whisper-model-config.cc
   offline-zipformer-ctc-model-config.cc

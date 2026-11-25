@@ -3,7 +3,6 @@
 // Copyright (c)  2022-2023  Xiaomi Corporation
 
 #include "sherpa-onnx/csrc/offline-whisper-model.h"
-#include "sherpa-onnx/csrc/ort-env.h"
 
 #include <algorithm>
 #include <cmath>
@@ -26,30 +25,23 @@
 #include "sherpa-onnx/csrc/file-utils.h"
 #include "sherpa-onnx/csrc/macros.h"
 #include "sherpa-onnx/csrc/math.h"
+#include "sherpa-onnx/csrc/offline-whisper-lang-probs.h"
+#include "sherpa-onnx/csrc/offline-whisper-language-candidates.h"
 #include "sherpa-onnx/csrc/onnx-utils.h"
 #include "sherpa-onnx/csrc/session.h"
 #include "sherpa-onnx/csrc/text-utils.h"
 
 namespace sherpa_onnx {
 
-namespace {
-
-static inline bool IsCudaProvider(const std::string &provider) {
-  return provider == "cuda";
-}
-
-}  // namespace
-
 class OfflineWhisperModel::Impl {
  public:
   explicit Impl(const OfflineModelConfig &config)
       : config_(config),
-        env_(CreateOrtEnv()),
-        sess_opts_(GetSessionOptions(config)),
+        env_(ORT_LOGGING_LEVEL_ERROR),
+        sess_opts_(GetSessionOptions(config, &cuda_provider_info_)),
         allocator_{},
         cpu_mem_info_(
-            Ort::MemoryInfo::CreateCpu(OrtDeviceAllocator, OrtMemTypeDefault)),
-        is_cpu_provider_(config.provider == "cpu" || config.provider.empty()) {
+            Ort::MemoryInfo::CreateCpu(OrtDeviceAllocator, OrtMemTypeDefault)) {
     encoder_sess_ = std::make_unique<Ort::Session>(
         env_, SHERPA_ONNX_TO_ORT_PATH(config.whisper.encoder), sess_opts_);
     InitEncoder(nullptr, 0);
@@ -62,13 +54,11 @@ class OfflineWhisperModel::Impl {
   }
 
   explicit Impl(const SpokenLanguageIdentificationConfig &config)
-      : lid_config_(config),
-        env_(CreateOrtEnv()),
-        sess_opts_(GetSessionOptions(config)),
+      : env_(ORT_LOGGING_LEVEL_ERROR),
+        sess_opts_(GetSessionOptions(config, &cuda_provider_info_)),
         allocator_{},
         cpu_mem_info_(
-            Ort::MemoryInfo::CreateCpu(OrtDeviceAllocator, OrtMemTypeDefault)),
-        is_cpu_provider_(config.provider == "cpu" || config.provider.empty()) {
+            Ort::MemoryInfo::CreateCpu(OrtDeviceAllocator, OrtMemTypeDefault)) {
     encoder_sess_ = std::make_unique<Ort::Session>(
         env_, SHERPA_ONNX_TO_ORT_PATH(config.whisper.encoder), sess_opts_);
     InitEncoder(nullptr, 0);
@@ -83,12 +73,11 @@ class OfflineWhisperModel::Impl {
   template <typename Manager>
   Impl(Manager *mgr, const OfflineModelConfig &config)
       : config_(config),
-        env_(CreateOrtEnv()),
-        sess_opts_(GetSessionOptions(config)),
+        env_(ORT_LOGGING_LEVEL_ERROR),
+        sess_opts_(GetSessionOptions(config, &cuda_provider_info_)),
         allocator_{},
         cpu_mem_info_(
-            Ort::MemoryInfo::CreateCpu(OrtDeviceAllocator, OrtMemTypeDefault)),
-        is_cpu_provider_(config.provider == "cpu" || config.provider.empty()) {
+            Ort::MemoryInfo::CreateCpu(OrtDeviceAllocator, OrtMemTypeDefault)) {
     {
       auto buf = ReadFile(mgr, config.whisper.encoder);
       InitEncoder(buf.data(), buf.size());
@@ -104,13 +93,11 @@ class OfflineWhisperModel::Impl {
 
   template <typename Manager>
   Impl(Manager *mgr, const SpokenLanguageIdentificationConfig &config)
-      : lid_config_(config),
-        env_(CreateOrtEnv()),
-        sess_opts_(GetSessionOptions(config)),
+      : env_(ORT_LOGGING_LEVEL_ERROR),
+        sess_opts_(GetSessionOptions(config, &cuda_provider_info_)),
         allocator_{},
         cpu_mem_info_(
-            Ort::MemoryInfo::CreateCpu(OrtDeviceAllocator, OrtMemTypeDefault)),
-        is_cpu_provider_(config.provider == "cpu" || config.provider.empty()) {
+            Ort::MemoryInfo::CreateCpu(OrtDeviceAllocator, OrtMemTypeDefault)) {
     {
       auto buf = ReadFile(mgr, config.whisper.encoder);
       InitEncoder(buf.data(), buf.size());
@@ -128,6 +115,9 @@ class OfflineWhisperModel::Impl {
     std::vector<Ort::Value> encoder_out;
 
     if (use_cuda_iobinding_) {
+      // BindInput can copy tensors before Run() selects the session's device.
+      Ort::ThrowOnError(
+          Ort::GetApi().SetCurrentGpuDeviceId(cuda_provider_info_.device_id));
       // Encoder outputs are n_layer_cross_k and n_layer_cross_v, which are used
       // multiple times in decoder steps. Keep them on GPU to avoid
       // device<->host copies.
@@ -165,6 +155,9 @@ class OfflineWhisperModel::Impl {
     std::vector<Ort::Value> decoder_out;
 
     if (use_cuda_iobinding_) {
+      // BindInput can copy tensors before Run() selects the session's device.
+      Ort::ThrowOnError(
+          Ort::GetApi().SetCurrentGpuDeviceId(cuda_provider_info_.device_id));
       // CPU-side sampling needs logits on CPU, while self KV cache should
       // remain on GPU to avoid large device<->host copies between decode steps.
       Ort::IoBinding binding(*decoder_sess_);
@@ -209,54 +202,18 @@ class OfflineWhisperModel::Impl {
 
   int32_t NumAlignmentHeads() const { return n_alignment_heads_; }
 
-  int32_t DetectLanguage(Ort::Value &cross_k,    // NOLINT
-                         Ort::Value &cross_v) {  // NOLINT
-    int64_t token_val = SOT();
-    std::array<int64_t, 2> token_shape{1, 1};
+  int32_t DetectLanguage(
+      Ort::Value &cross_k, Ort::Value &cross_v,  // NOLINT
+      const std::vector<int32_t> &language_candidate_ids) {
+    return DetectLanguageImpl(cross_k, cross_v, language_candidate_ids,
+                              /*probs=*/nullptr);
+  }
 
-    auto memory_info =
-        Ort::MemoryInfo::CreateCpu(OrtDeviceAllocator, OrtMemTypeDefault);
-
-    Ort::Value tokens = Ort::Value::CreateTensor(
-        memory_info, &token_val, 1, token_shape.data(), token_shape.size());
-
-    auto self_kv_cache = GetInitialSelfKVCache();
-
-    std::array<int64_t, 1> offset_shape{1};
-    Ort::Value offset = Ort::Value::CreateTensor<int64_t>(
-        Allocator(), offset_shape.data(), offset_shape.size());
-    *(offset.GetTensorMutableData<int64_t>()) = 0;
-
-    auto decoder_out =
-        ForwardDecoder(std::move(tokens), std::move(self_kv_cache.first),
-                       std::move(self_kv_cache.second), std::move(cross_k),
-                       std::move(cross_v), std::move(offset));
-
-    cross_k = std::move(std::get<3>(decoder_out));
-    cross_v = std::move(std::get<4>(decoder_out));
-
-    const float *p_logits = std::get<0>(decoder_out).GetTensorData<float>();
-    const auto &all_language_ids = GetAllLanguageIDs();
-
-    int32_t lang_id = all_language_ids[0];
-    float this_logit = p_logits[lang_id];
-
-    for (int32_t i = 1; i != all_language_ids.size(); ++i) {
-      int32_t id = all_language_ids[i];
-      float p = p_logits[id];
-
-      if (p > this_logit) {
-        this_logit = p;
-        lang_id = id;
-      }
-    }
-
-    if (config_.debug) {
-      SHERPA_ONNX_LOGE("Detected language: %s",
-                       GetID2Lang().at(lang_id).c_str());
-    }
-
-    return lang_id;
+  int32_t DetectLanguageWithProbs(
+      Ort::Value &cross_k, Ort::Value &cross_v,  // NOLINT
+      const std::vector<int32_t> &language_candidate_ids,
+      std::vector<std::pair<std::string, float>> *probs) {
+    return DetectLanguageImpl(cross_k, cross_v, language_candidate_ids, probs);
   }
 
   std::pair<Ort::Value, Ort::Value> GetInitialSelfKVCache() {
@@ -322,6 +279,52 @@ class OfflineWhisperModel::Impl {
   bool IsMultiLingual() const { return is_multilingual_; }
 
  private:
+  int32_t DetectLanguageImpl(
+      Ort::Value &cross_k, Ort::Value &cross_v,  // NOLINT
+      const std::vector<int32_t> &language_candidate_ids,
+      std::vector<std::pair<std::string, float>> *probs) {
+    int64_t token_val = SOT();
+    std::array<int64_t, 2> token_shape{1, 1};
+
+    auto memory_info =
+        Ort::MemoryInfo::CreateCpu(OrtDeviceAllocator, OrtMemTypeDefault);
+
+    Ort::Value tokens = Ort::Value::CreateTensor(
+        memory_info, &token_val, 1, token_shape.data(), token_shape.size());
+
+    auto self_kv_cache = GetInitialSelfKVCache();
+
+    std::array<int64_t, 1> offset_shape{1};
+    Ort::Value offset = Ort::Value::CreateTensor<int64_t>(
+        Allocator(), offset_shape.data(), offset_shape.size());
+    *(offset.GetTensorMutableData<int64_t>()) = 0;
+
+    auto decoder_out =
+        ForwardDecoder(std::move(tokens), std::move(self_kv_cache.first),
+                       std::move(self_kv_cache.second), std::move(cross_k),
+                       std::move(cross_v), std::move(offset));
+
+    cross_k = std::move(std::get<3>(decoder_out));
+    cross_v = std::move(std::get<4>(decoder_out));
+
+    const float *p_logits = std::get<0>(decoder_out).GetTensorData<float>();
+    const auto &ids = language_candidate_ids.empty() ? GetAllLanguageIDs()
+                                                     : language_candidate_ids;
+    int32_t lang_id = SelectWhisperLanguage(p_logits, ids);
+
+    if (probs != nullptr) {
+      ComputeWhisperLangProbs(p_logits, GetAllLanguageIDs(), GetID2Lang(),
+                              probs);
+    }
+
+    if (config_.debug) {
+      SHERPA_ONNX_LOGE("Detected language: %s",
+                       GetID2Lang().at(lang_id).c_str());
+    }
+
+    return lang_id;
+  }
+
   void InitEncoder(void *model_data, size_t model_data_length) {
     if (model_data) {
       encoder_sess_ = std::make_unique<Ort::Session>(
@@ -428,32 +431,23 @@ class OfflineWhisperModel::Impl {
   }
 
   void InitCudaIOBinding() {
-    use_cuda_iobinding_ = (!is_cpu_provider_ && IsCudaProvider(GetProvider()));
+    use_cuda_iobinding_ = cuda_provider_info_.enabled;
     if (use_cuda_iobinding_) {
-      // Use device 0 by default. SessionOptions() in sherpa-onnx usually
-      // configures the CUDA EP device; binding here only affects output memory.
       cuda_mem_info_ = std::make_unique<Ort::MemoryInfo>(
-          "Cuda", OrtDeviceAllocator, 0, OrtMemTypeDefault);
+          "Cuda", OrtDeviceAllocator, cuda_provider_info_.device_id,
+          OrtMemTypeDefault);
     }
-  }
-
-  std::string GetProvider() const {
-    if (!config_.provider.empty()) {
-      return config_.provider;
-    }
-    return lid_config_.provider;
   }
 
   OfflineModelConfig config_;
-  SpokenLanguageIdentificationConfig lid_config_;
   Ort::Env env_;
+  CudaProviderInfo cuda_provider_info_;
   Ort::SessionOptions sess_opts_;
   Ort::AllocatorWithDefaultOptions allocator_;
 
   Ort::MemoryInfo cpu_mem_info_;
   std::unique_ptr<Ort::MemoryInfo> cuda_mem_info_;
   bool use_cuda_iobinding_ = false;
-  bool is_cpu_provider_ = false;
 
   std::unique_ptr<Ort::Session> encoder_sess_;
   std::unique_ptr<Ort::Session> decoder_sess_;
@@ -536,9 +530,18 @@ OfflineWhisperModel::ForwardDecoder(Ort::Value tokens,
       std::move(n_layer_cross_v), std::move(offset));
 }
 
-int32_t OfflineWhisperModel::DetectLanguage(Ort::Value &cross_k,    // NOLINT
-                                            Ort::Value &cross_v) {  // NOLINT
-  return impl_->DetectLanguage(cross_k, cross_v);
+int32_t OfflineWhisperModel::DetectLanguage(
+    Ort::Value &cross_k, Ort::Value &cross_v,  // NOLINT
+    const std::vector<int32_t> &language_candidate_ids) {
+  return impl_->DetectLanguage(cross_k, cross_v, language_candidate_ids);
+}
+
+int32_t OfflineWhisperModel::DetectLanguageWithProbs(
+    Ort::Value &cross_k, Ort::Value &cross_v,  // NOLINT
+    const std::vector<int32_t> &language_candidate_ids,
+    std::vector<std::pair<std::string, float>> *probs) {
+  return impl_->DetectLanguageWithProbs(cross_k, cross_v,
+                                        language_candidate_ids, probs);
 }
 
 std::pair<Ort::Value, Ort::Value> OfflineWhisperModel::GetInitialSelfKVCache()

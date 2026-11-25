@@ -1,6 +1,7 @@
 // sherpa-onnx/csrc/features.h
 //
 // Copyright (c)  2023  Xiaomi Corporation
+// Copyright (c)  2026  Julian Pscheid
 
 #ifndef SHERPA_ONNX_CSRC_FEATURES_H_
 #define SHERPA_ONNX_CSRC_FEATURES_H_
@@ -85,6 +86,15 @@ struct FeatureExtractorConfig {
 
   bool round_to_power_of_two = true;
 
+  // Recompute centered, zero-padded NeMo features over each requested audio
+  // buffer. Capacity is in feature frames; 0 disables this internal mode.
+  int32_t nemo_buffered_capacity = 0;
+
+  // For streaming NeMo models. Set internally; not exposed to users.
+  // If true, use NeMo's additive log-zero guard log(x + 2^-24) instead of
+  // the default hard floor log(max(x, FLT_EPSILON)).
+  bool use_nemo_log_guard = false;
+
   std::string ToString() const;
 
   void Register(ParseOptions *po);
@@ -129,6 +139,15 @@ class FeatureExtractor {
    *         which is flattened into a 1-D vector (flattened in row major)
    */
   std::vector<float> GetFrames(int32_t frame_index, int32_t n) const;
+
+  // Internal buffered NeMo path. Include a final partial hop when is_final,
+  // and return the raw window's offset from frame_index in samples.
+  std::vector<float> GetBufferedFeatures(int32_t frame_index, int32_t n,
+                                         bool is_final,
+                                         int32_t *start_sample_offset) const;
+
+  // Samples beyond the last complete feature hop in the buffered NeMo path.
+  int32_t NumTrailingSamples() const;
 
   /// Return feature dim of this extractor
   int32_t FeatureDim() const;

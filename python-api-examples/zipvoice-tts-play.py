@@ -17,6 +17,8 @@ rm sherpa-onnx-zipvoice-distill-int8-zh-en-emilia.tar.bz2
 
 wget https://github.com/k2-fsa/sherpa-onnx/releases/download/vocoder-models/vocos_24khz.onnx
 
+wget https://github.com/k2-fsa/sherpa-onnx/releases/download/tts-models/lexicon-en-us.txt
+
 python3 ./python-api-examples/zipvoice-tts-play.py
 
 You can find more models at
@@ -34,7 +36,6 @@ import threading
 import time
 from pathlib import Path
 
-import librosa
 import numpy as np
 import sherpa_onnx
 import soundfile as sf
@@ -57,8 +58,7 @@ def create_tts():
                 tokens="./sherpa-onnx-zipvoice-distill-int8-zh-en-emilia/tokens.txt",
                 encoder="./sherpa-onnx-zipvoice-distill-int8-zh-en-emilia/encoder.int8.onnx",
                 decoder="./sherpa-onnx-zipvoice-distill-int8-zh-en-emilia/decoder.int8.onnx",
-                data_dir="./sherpa-onnx-zipvoice-distill-int8-zh-en-emilia/espeak-ng-data",
-                lexicon="./sherpa-onnx-zipvoice-distill-int8-zh-en-emilia/lexicon.txt",
+                lexicon="./sherpa-onnx-zipvoice-distill-int8-zh-en-emilia/lexicon.txt,./lexicon-en-us.txt",
                 vocoder="./vocos_24khz.onnx",
             ),
             debug=False,
@@ -165,7 +165,9 @@ def main():
     tts = create_tts()
     logging.info("Loading model done.")
 
-    reference_audio, reference_sample_rate = librosa.load(reference_audio_file, sr=None)
+    reference_audio, reference_sample_rate = sf.read(reference_audio_file, dtype="float32")
+    if reference_audio.ndim > 1:
+        reference_audio = reference_audio[:, 0]  # only use the first channel
     reference_text = "那还是三十六年前, 一九八七年. 我呢考上了武汉大学的计算机系."
     text = """
     小米的价值观是真诚, 热爱.

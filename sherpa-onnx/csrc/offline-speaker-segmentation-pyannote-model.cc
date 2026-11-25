@@ -3,9 +3,9 @@
 // Copyright (c)  2024  Xiaomi Corporation
 
 #include "sherpa-onnx/csrc/offline-speaker-segmentation-pyannote-model.h"
-#include "sherpa-onnx/csrc/ort-env.h"
 #include "sherpa-onnx/csrc/macros.h"
 
+#include <cmath>
 #include <memory>
 #include <string>
 #include <utility>
@@ -31,7 +31,7 @@ class OfflineSpeakerSegmentationPyannoteModel::Impl {
  public:
   explicit Impl(const OfflineSpeakerSegmentationModelConfig &config)
       : config_(config),
-        env_(CreateOrtEnv()),
+        env_(ORT_LOGGING_LEVEL_ERROR),
         sess_opts_(GetSessionOptions(config)),
         allocator_{} {
     sess_ = std::make_unique<Ort::Session>(
@@ -42,7 +42,7 @@ class OfflineSpeakerSegmentationPyannoteModel::Impl {
   template <typename Manager>
   Impl(Manager *mgr, const OfflineSpeakerSegmentationModelConfig &config)
       : config_(config),
-        env_(CreateOrtEnv()),
+        env_(ORT_LOGGING_LEVEL_ERROR),
         sess_opts_(GetSessionOptions(config)),
         allocator_{} {
     auto buf = ReadFile(mgr, config_.pyannote.model);
@@ -93,8 +93,29 @@ class OfflineSpeakerSegmentationPyannoteModel::Impl {
     SHERPA_ONNX_READ_META_DATA(meta_data_.sample_rate, "sample_rate");
     SHERPA_ONNX_READ_META_DATA(meta_data_.window_size, "window_size");
 
-    meta_data_.window_shift =
-        static_cast<int32_t>(0.1 * meta_data_.window_size);
+    const double window_shift =
+        static_cast<double>(config_.pyannote.window_shift_ratio) *
+        meta_data_.window_size;
+    if (std::isnan(window_shift) || window_shift < 1) {
+      SHERPA_ONNX_LOGE(
+          "Computed Pyannote window shift %f is less than 1 sample or "
+          "invalid. Clamping it to 1 sample.",
+          window_shift);
+      meta_data_.window_shift = 1;
+    } else if (window_shift > meta_data_.window_size) {
+      SHERPA_ONNX_LOGE(
+          "Computed Pyannote window shift %f exceeds window size %d. "
+          "Clamping it to %d samples.",
+          window_shift, meta_data_.window_size, meta_data_.window_size);
+      meta_data_.window_shift = meta_data_.window_size;
+    } else {
+      meta_data_.window_shift = static_cast<int32_t>(window_shift);
+    }
+
+    if (config_.debug) {
+      SHERPA_ONNX_LOGE("Pyannote window shift: %d samples",
+                       meta_data_.window_shift);
+    }
 
     SHERPA_ONNX_READ_META_DATA(meta_data_.receptive_field_size,
                                "receptive_field_size");

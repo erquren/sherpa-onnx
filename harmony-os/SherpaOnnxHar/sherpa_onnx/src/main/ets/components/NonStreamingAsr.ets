@@ -1,5 +1,8 @@
 import {
   acceptWaveformOffline,
+  offlineStreamSetOption,
+  offlineStreamGetOption,
+  offlineStreamHasOption,
   createOfflineRecognizer,
   createOfflineStream,
   decodeOfflineStream,
@@ -24,6 +27,31 @@ export class OfflineStream {
   // sampleRate is a number
   acceptWaveform(obj: Samples) {
     acceptWaveformOffline(this.handle, obj)
+  }
+
+  /**
+   * Set a per-stream option; it overrides the config for this stream only.
+   * For example setOption('debug', '1') prints the per-utterance alignment
+   * info of this stream.
+   */
+  setOption(key: string, value: string): void {
+    offlineStreamSetOption(this.handle, key, value);
+  }
+
+  /**
+   * Get a string option of this stream. Returns an empty string if the
+   * option has not been set; use hasOption() to distinguish an unset
+   * option from an empty value.
+   */
+  getOption(key: string): string {
+    return offlineStreamGetOption(this.handle, key);
+  }
+
+  /**
+   * Check whether an option has been set on this stream.
+   */
+  hasOption(key: string): boolean {
+    return offlineStreamHasOption(this.handle, key);
   }
 }
 
@@ -179,18 +207,24 @@ export class OfflineLMConfig {
   public scale: number = 1.0;
 }
 
+export class OfflineCtcFstDecoderConfig {
+  public graph: string = '';
+  public maxActive: number = 3000;
+}
+
 export class OfflineRecognizerConfig {
   public featConfig: FeatureConfig = new FeatureConfig();
   public modelConfig: OfflineModelConfig = new OfflineModelConfig();
   public lmConfig: OfflineLMConfig = new OfflineLMConfig();
   public decodingMethod: string = "greedy_search";
   public maxActivePaths: number = 4;
-  public hotwordsFfile: string = '';
+  public hotwordsFile: string = '';
   public hotwordsScore: number = 1.5;
   public ruleFsts: string = '';
   public ruleFars: string = '';
   public blankPenalty: number = 0;
   public hr: HomophoneReplacerConfig = new HomophoneReplacerConfig();
+  public ctcFstDecoderConfig: OfflineCtcFstDecoderConfig = new OfflineCtcFstDecoderConfig();
 }
 
 export class OfflineRecognizerResult {

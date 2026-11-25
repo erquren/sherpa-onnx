@@ -3,7 +3,6 @@
 // Copyright (c)  2024-2026  Xiaomi Corporation
 
 #include "sherpa-onnx/csrc/offline-moonshine-model-v2.h"
-#include "sherpa-onnx/csrc/ort-env.h"
 
 #include <memory>
 #include <string>
@@ -31,7 +30,7 @@ class OfflineMoonshineModelV2::Impl {
  public:
   explicit Impl(const OfflineModelConfig &config)
       : config_(config),
-        env_(CreateOrtEnv()),
+        env_(ORT_LOGGING_LEVEL_ERROR),
         sess_opts_(GetSessionOptions(config)),
         allocator_{} {
     encoder_sess_ = std::make_unique<Ort::Session>(
@@ -47,7 +46,7 @@ class OfflineMoonshineModelV2::Impl {
   template <typename Manager>
   Impl(Manager *mgr, const OfflineModelConfig &config)
       : config_(config),
-        env_(CreateOrtEnv()),
+        env_(ORT_LOGGING_LEVEL_ERROR),
         sess_opts_(GetSessionOptions(config)),
         allocator_{} {
     {
@@ -104,9 +103,19 @@ class OfflineMoonshineModelV2::Impl {
     inputs.reserve(4 + states.size());
 
     if (decoder_needs_mask_) {
-      mask.resize(encoder_out.GetTensorTypeAndShapeInfo().GetShape()[1], 1);
-      std::array<int64_t, 2> shape = {
-          1, encoder_out.GetTensorTypeAndShapeInfo().GetShape()[1]};
+      // The moonshine v2 decoder graphs follow the transformers contract:
+      // encoder_attention_mask is at RAW audio length and the graph
+      // downsamples it itself (mask[..., ::downsample_stride], stride 384 =
+      // the conv strides 64*3*2). Feeding it at encoder-frame length made
+      // the internal downsample produce ceil(frames/384) elements, which
+      // fails with an onnxruntime broadcast error above 384 frames (the
+      // caught exception became a silent empty result). Any all-ones length
+      // >= (frames-1)*384 + 1 is semantically correct for unmasked audio;
+      // frames*384 is a safe choice. See issue #3975.
+      int64_t raw_len =
+          encoder_out.GetTensorTypeAndShapeInfo().GetShape()[1] * 384;
+      mask.resize(raw_len, 1);
+      std::array<int64_t, 2> shape = {1, raw_len};
 
       Ort::Value mask_tensor = Ort::Value::CreateTensor<int64_t>(
           memory_info, mask.data(), mask.size(), shape.data(), shape.size());

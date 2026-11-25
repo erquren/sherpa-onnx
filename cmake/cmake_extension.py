@@ -42,19 +42,26 @@ def is_arm64():
     return platform.machine() in ["arm64", "aarch64"]
 
 
+def is_arm32():
+    # armv8l is a 32-bit armv7 userland running on an aarch64 kernel
+    return platform.machine() in ["arm", "armv7l", "armv8l"]
+
+
 def is_x86():
     return platform.machine() in ["i386", "i686", "x86_64"]
 
 
 def enable_alsa():
     build_alsa = os.environ.get("SHERPA_ONNX_ENABLE_ALSA", None)
-    return build_alsa and is_linux() and (is_arm64() or is_x86())
+    return build_alsa and is_linux() and (is_arm64() or is_arm32() or is_x86())
 
 
 def get_binaries():
     binaries = [
         "sherpa-onnx",
+        "sherpa-onnx-fa",
         "sherpa-onnx-keyword-spotter",
+        "sherpa-onnx-keyword-spotter-microphone",
         "sherpa-onnx-microphone",
         "sherpa-onnx-microphone-offline",
         "sherpa-onnx-microphone-offline-audio-tagging",
@@ -62,7 +69,9 @@ def get_binaries():
         "sherpa-onnx-offline",
         "sherpa-onnx-offline-audio-tagging",
         "sherpa-onnx-offline-denoiser",
+        "sherpa-onnx-offline-diacritization",
         "sherpa-onnx-offline-language-identification",
+        "sherpa-onnx-offline-parallel",
         "sherpa-onnx-offline-punctuation",
         "sherpa-onnx-offline-source-separation",
         "sherpa-onnx-offline-speaker-diarization",
@@ -85,6 +94,7 @@ def get_binaries():
 
     if enable_alsa():
         binaries += [
+            "sherpa-onnx-keyword-spotter-alsa",
             "sherpa-onnx-alsa",
             "sherpa-onnx-alsa-offline",
             "sherpa-onnx-alsa-offline-audio-tagging",
@@ -153,10 +163,6 @@ class BuildExtension(build_ext):
         if not need_split_package():
             extra_cmake_args += f" -DCMAKE_INSTALL_PREFIX={install_dir} "
         extra_cmake_args += " -DBUILD_SHARED_LIBS=ON "
-        extra_cmake_args += " -DBUILD_PIPER_PHONMIZE_EXE=OFF "
-        extra_cmake_args += " -DBUILD_PIPER_PHONMIZE_TESTS=OFF "
-        extra_cmake_args += " -DBUILD_ESPEAK_NG_EXE=OFF "
-        extra_cmake_args += " -DBUILD_ESPEAK_NG_TESTS=OFF "
 
         if not need_split_package():
             extra_cmake_args += " -DSHERPA_ONNX_ENABLE_C_API=ON "
@@ -343,6 +349,11 @@ class BuildExtension(build_ext):
 
         binaries = get_binaries()
 
+        # setup.py creates this directory only when it also installs binaries,
+        # i.e., not when SHERPA_ONNX_ENABLE_BINARY=OFF. The DLLs below are
+        # copied regardless, so make sure the destination exists.
+        os.makedirs(out_bin_dir, exist_ok=True)
+
         for f in binaries:
             suffix = "" if ".dll" in f else suffix
             src_file = install_dir / "bin" / (f + suffix)
@@ -355,7 +366,7 @@ class BuildExtension(build_ext):
                 continue
 
             print(f"Copying {src_file} to {out_bin_dir}/")
-            shutil.copy(f"{src_file}", f"{out_bin_dir}/")
+            shutil.copy(f"{src_file}", f"{out_bin_dir}")
 
         if Path(f"{install_dir}/bin").is_dir():
             shutil.rmtree(f"{install_dir}/bin")
@@ -363,6 +374,3 @@ class BuildExtension(build_ext):
             shutil.rmtree(f"{install_dir}/share")
         if Path(f"{install_dir}/lib/pkgconfig").is_dir():
             shutil.rmtree(f"{install_dir}/lib/pkgconfig")
-
-        if is_macos():
-            os.remove(f"{install_dir}/lib/libonnxruntime.dylib")

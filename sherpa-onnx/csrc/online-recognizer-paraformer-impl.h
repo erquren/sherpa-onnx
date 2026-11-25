@@ -116,9 +116,7 @@ class OnlineRecognizerParaformerImpl : public OnlineRecognizerImpl {
       SHERPA_ONNX_EXIT(-1);
     }
 
-    // Paraformer models assume input samples are in the range
-    // [-32768, 32767], so we set normalize_samples to false
-    config_.feat_config.normalize_samples = false;
+    InitFeatConfig();
   }
 
   template <typename Manager>
@@ -139,9 +137,7 @@ class OnlineRecognizerParaformerImpl : public OnlineRecognizerImpl {
       SHERPA_ONNX_EXIT(-1);
     }
 
-    // Paraformer models assume input samples are in the range
-    // [-32768, 32767], so we set normalize_samples to false
-    config_.feat_config.normalize_samples = false;
+    InitFeatConfig();
   }
 
   OnlineRecognizerParaformerImpl(const OnlineRecognizerParaformerImpl &) =
@@ -229,6 +225,15 @@ class OnlineRecognizerParaformerImpl : public OnlineRecognizerImpl {
   }
 
  private:
+  void InitFeatConfig() {
+    // Paraformer models assume input samples are in the range
+    // [-32768, 32767], so we set normalize_samples to false
+    config_.feat_config.normalize_samples = false;
+    config_.feat_config.window_type = "hamming";
+    config_.feat_config.high_freq = 0;
+    config_.feat_config.snip_edges = true;
+  }
+
   void DecodeStream(OnlineStream *s) const {
     const auto num_processed_frames = s->GetNumProcessedFrames();
     int32_t available_frames = s->NumFramesReady() - num_processed_frames;
@@ -238,9 +243,8 @@ class OnlineRecognizerParaformerImpl : public OnlineRecognizerImpl {
     // read the remaining frames and pad with zeros to chunk_size_.
     bool is_short_final = is_final && available_frames < chunk_size_;
 
-    std::vector<float> frames =
-        s->GetFrames(num_processed_frames,
-                     is_short_final ? available_frames : chunk_size_);
+    std::vector<float> frames = s->GetFrames(
+        num_processed_frames, is_short_final ? available_frames : chunk_size_);
 
     if (is_short_final) {
       int32_t feat_dim_raw = config_.feat_config.feature_dim;
@@ -393,6 +397,8 @@ class OnlineRecognizerParaformerImpl : public OnlineRecognizerImpl {
         std::move(acoustic_embedding_tensor),
         std::move(acoustic_embedding_length_tensor), std::move(states));
 
+    // states is moved-from but valid; refill it with the new decoder states.
+    // NOLINTNEXTLINE(bugprone-use-after-move)
     states.reserve(model_.DecoderNumBlocks());
     for (int32_t i = 2; i != decoder_out_vec.size(); ++i) {
       // TODO(fangjun): When we change chunk_size_, we need to

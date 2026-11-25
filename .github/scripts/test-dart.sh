@@ -1,10 +1,142 @@
 #!/usr/bin/env bash
 
 set -ex
-
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+source "$SCRIPT_DIR/common.sh"
 cd dart-api-examples
 
+echo '----------Version----------'
+pushd version
+./run.sh
+popd
+
+echo '----------Forced alignment (English)----------'
+pushd forced-alignment-english
+./run.sh
+popd
+grep -q 'name = "phones"' forced-alignment-english/en.TextGrid
+grep -q 'name = "words"' forced-alignment-english/en.TextGrid
+cat forced-alignment-english/en.TextGrid
+
+echo '----------Forced alignment (Chinese)----------'
+pushd forced-alignment-chinese
+./run.sh
+popd
+grep -q 'name = "phones"' forced-alignment-chinese/zh.TextGrid
+grep -q 'name = "words"' forced-alignment-chinese/zh.TextGrid
+cat forced-alignment-chinese/zh.TextGrid
+
+mkdir -p test-forced-alignment-english test-forced-alignment-chinese
+cp forced-alignment-english/english-mfa-v3.1.0/en.wav test-forced-alignment-english/
+mv forced-alignment-english/en.TextGrid test-forced-alignment-english/
+cp forced-alignment-chinese/zh-aishell3-pinyin/zh.wav test-forced-alignment-chinese/
+mv forced-alignment-chinese/zh.TextGrid test-forced-alignment-chinese/
+
+# The word clips need Python; skip them where it is missing (e.g. Termux).
+# The helper itself skips when soundfile is not installed. Termux calls the
+# interpreter `python`, most other platforms `python3`.
+if command -v python3 >/dev/null 2>&1; then
+  py=python3
+elif command -v python >/dev/null 2>&1; then
+  py=python
+else
+  py=
+fi
+
+if [ -n "$py" ]; then
+  $py ../python-api-examples/textgrid-to-word-wavs.py \
+    --wav test-forced-alignment-english/en.wav \
+    --textgrid test-forced-alignment-english/en.TextGrid \
+    --out-dir test-forced-alignment-english/word-clips-en
+  $py ../python-api-examples/textgrid-to-word-wavs.py \
+    --wav test-forced-alignment-chinese/zh.wav \
+    --textgrid test-forced-alignment-chinese/zh.TextGrid \
+    --out-dir test-forced-alignment-chinese/word-clips-zh
+else
+  echo "Python is not available; skipping the word clips"
+fi
+
+rm -rf forced-alignment-english/english-mfa-v3.1.0 forced-alignment-chinese/zh-aishell3-pinyin
+
+pushd speech-enhancement-voxlock
+echo "speech enhancement with VoxLock"
+./run.sh
+popd
+
+pushd speech-enhancement-voxlock-with-voice-sample
+echo "speech enhancement with VoxLock and a voice sample"
+./run.sh
+popd
+
+pushd streaming-speech-enhancement-voxlock
+echo "streaming speech enhancement with VoxLock"
+./run.sh
+popd
+
+pushd streaming-speech-enhancement-voxlock-with-voice-sample
+echo "streaming speech enhancement with VoxLock and a voice sample"
+./run.sh
+popd
+
+pushd tts
+
+echo '----------tts----------'
+./run-pocket-en.sh
+./run-kitten-en-lexicon.sh
+./run-kitten-en-phonemize.sh
+./run-supertonic-en.sh
+./run-kokoro-zh-en-lexicon.sh
+./run-kokoro-en-lexicon.sh
+./run-kokoro-en-phonemize.sh
+./run-matcha-zh-lexicon.sh
+./run-matcha-en-lexicon.sh
+./run-matcha-en-phonemize.sh
+./run-zipvoice-zh-en-lexicon.sh
+ls -lh *.wav
+rm -rf matcha-icefall-*
+rm -rf sherpa-onnx-zipvoice-*
+rm -f lexicon-en-us.txt
+rm *.onnx
+
+echo '----------piper tts----------'
+./run-piper-lexicon.sh
+./run-piper-phonemize.sh
+rm -f lexicon-en-us.txt
+rm -rf vits-piper-*
+
+echo '----------german tts----------'
+./run-vits-de-phonemize.sh
+rm -rf vits-piper-*
+
+echo '----------coqui tts----------'
+./run-coqui.sh
+rm -rf vits-coqui-*
+
+echo '----------zh tts----------'
+./run-vits-zh-lexicon.sh
+rm -rf sherpa-onnx-*
+
+ls -lh *.wav
+
+popd # tts
+
 pushd non-streaming-asr
+
+echo '----------Moonshine v2----------'
+./run-moonshine-v2.sh
+rm -rf sherpa-onnx-*
+
+echo '----------Wenet CTC----------'
+./run-wenet-ctc.sh
+rm -rf sherpa-onnx-*
+
+echo '----------Zipformer CTC----------'
+./run-zipformer-ctc.sh
+rm -rf sherpa-onnx-*
+
+echo '----------Zipformer CTC HLG----------'
+./run-zipformer-ctc-hlg.sh
+rm -rf sherpa-onnx-*
 
 echo '----------Cohere Transcribe----------'
 ./run-cohere-transcribe.sh
@@ -12,10 +144,6 @@ rm -rf sherpa-onnx-*
 
 echo '----------Qwen3 ASR----------'
 ./run-qwen3-asr.sh
-rm -rf sherpa-onnx-*
-
-echo '----------Moonshine v2----------'
-./run-moonshine-v2.sh
 rm -rf sherpa-onnx-*
 
 echo '----------FireRedASR CTC----------'
@@ -32,14 +160,6 @@ rm -rf sherpa-onnx-*
 
 echo '----------Omnilingual ASR CTC----------'
 ./run-omnilingual-asr-ctc.sh
-rm -rf sherpa-onnx-*
-
-echo '----------Wenet CTC----------'
-./run-wenet-ctc.sh
-rm -rf sherpa-onnx-*
-
-echo '----------Zipformer CTC----------'
-./run-zipformer-ctc.sh
 rm -rf sherpa-onnx-*
 
 echo '----------SenseVoice----------'
@@ -69,6 +189,7 @@ rm -rf sherpa-onnx-*
 
 echo '----------moonshine----------'
 ./run-moonshine.sh
+./run-moonshine-async.sh
 rm -rf sherpa-onnx-*
 
 echo '----------whisper----------'
@@ -115,38 +236,6 @@ echo "streaming speech enhancement with dpdfnet models"
 ./run.sh
 ls -lh
 popd
-
-pushd tts
-
-echo '----------tts----------'
-./run-pocket-en.sh
-./run-kitten-en.sh
-./run-supertonic-en.sh
-./run-kokoro-zh-en.sh
-./run-kokoro-en.sh
-./run-matcha-zh.sh
-./run-matcha-en.sh
-./run-zipvoice-zh-en.sh
-ls -lh *.wav
-rm -rf matcha-icefall-*
-rm -rf sherpa-onnx-zipvoice-*
-rm *.onnx
-
-echo '----------piper tts----------'
-./run-piper.sh
-rm -rf vits-piper-*
-
-echo '----------coqui tts----------'
-./run-coqui.sh
-rm -rf vits-coqui-*
-
-echo '----------zh tts----------'
-./run-vits-zh.sh
-rm -rf sherpa-onnx-*
-
-ls -lh *.wav
-
-popd # tts
 
 pushd spoken-language-identification
 ./run-whisper.sh

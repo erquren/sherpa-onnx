@@ -18,6 +18,7 @@ on:
       - '.github/scripts/test-offline-tts.sh'
       - '.github/scripts/test-online-ctc.sh'
       - '.github/scripts/test-audio-tagging.sh'
+      - '.github/scripts/test-offline-diacritization.sh'
       - '.github/scripts/test-offline-punctuation.sh'
       - '.github/scripts/test-online-punctuation.sh'
       - '.github/scripts/test-speaker-diarization.sh'
@@ -41,6 +42,7 @@ on:
       - '.github/scripts/test-offline-tts.sh'
       - '.github/scripts/test-online-ctc.sh'
       - '.github/scripts/test-audio-tagging.sh'
+      - '.github/scripts/test-offline-diacritization.sh'
       - '.github/scripts/test-offline-punctuation.sh'
       - '.github/scripts/test-online-punctuation.sh'
       - '.github/scripts/test-speaker-diarization.sh'
@@ -124,11 +126,6 @@ jobs:
           ls -lh bin
 
           file ./bin/sherpa-onnx
-
-          rm -fv ./install/include/cargs.h
-          rm -fv ./install/lib/cargs.h
-          rm -fv ./install/lib/libcargs.dylib
-          rm -fv ./install/lib/libcargs.a
           rm -rfv ./install/lib/pkgconfig
 
       - name: Display dependencies of sherpa-onnx for macos
@@ -142,6 +139,18 @@ jobs:
         if: matrix.build_type == 'Release'
         shell: bash
         run: |
+          sign_macos_tree() {
+            root_dir="$1"
+
+            while IFS= read -r -d '' f; do
+              if file -b "$f" | grep -q '^Mach-O'; then
+                codesign --force --sign - --timestamp=none \
+                  --preserve-metadata=identifier,entitlements,flags,runtime "$f"
+                codesign --verify --strict --verbose=2 "$f"
+              fi
+            done < <(find "$root_dir" -type f \( -path "$root_dir/bin/*" -o -path "$root_dir/lib/*.dylib*" \) -print0)
+          }
+
           thin_macos_tree() {
             src_dir="$1"
             dst_dir="$2"
@@ -177,18 +186,18 @@ jobs:
           brew install tree
           tree $dst
 
+          sign_macos_tree "$dst"
           tar cjvf ${dst}.tar.bz2 $dst
 
           lib_dst=${dst}-lib
           mkdir -p ${lib_dst}/lib
           if [[ ${{ matrix.lib_type }} == shared ]]; then
             cp -av build/install/lib/lib*.dylib* ${lib_dst}/lib/
-            rm -f ${lib_dst}/lib/libcargs.dylib ${lib_dst}/lib/libcargs*.dylib
           else
             cp -av build/install/lib/lib*.a ${lib_dst}/lib/
-            rm -f ${lib_dst}/lib/libcargs.a
           fi
           tree ${lib_dst}
+          sign_macos_tree "$lib_dst"
           tar cjvf ${lib_dst}.tar.bz2 ${lib_dst}
 
           for arch in x86_64 arm64; do
@@ -201,14 +210,22 @@ jobs:
             arch_dst=${dst/osx-universal2/osx-${arch_name}}
             thin_macos_tree "$dst" "$arch_dst" "$arch"
             tree "$arch_dst"
+            sign_macos_tree "$arch_dst"
             tar cjvf ${arch_dst}.tar.bz2 ${arch_dst}
 
             arch_lib_dst=${lib_dst/osx-universal2/osx-${arch_name}}
             thin_macos_tree "$lib_dst" "$arch_lib_dst" "$arch"
             tree "$arch_lib_dst"
+            sign_macos_tree "$arch_lib_dst"
             tar cjvf ${arch_lib_dst}.tar.bz2 ${arch_lib_dst}
           done
 
+      - name: Get sherpa-onnx version
+        shell: bash
+        run: |
+          SHERPA_ONNX_VERSION=v$(grep "SHERPA_ONNX_VERSION" ./CMakeLists.txt | cut -d " " -f 2 | cut -d '"' -f 2)
+          echo "SHERPA_ONNX_VERSION=$SHERPA_ONNX_VERSION" >> "$GITHUB_ENV"
+          echo "SHERPA_ONNX_VERSION: $SHERPA_ONNX_VERSION"
       - name: Release pre-compiled binaries and libs for macOS
         if: github.repository_owner == 'csukuangfj' && github.event_name == 'push' && contains(github.ref, 'refs/tags/') && matrix.build_type == 'Release'
         uses: svenstaro/upload-release-action@v2
@@ -218,7 +235,7 @@ jobs:
           file: sherpa-onnx-*.tar.bz2
           repo_name: k2-fsa/sherpa-onnx
           repo_token: ${{ secrets.UPLOAD_GH_SHERPA_ONNX_TOKEN }}
-          tag: v1.12.31
+          tag: ${{ env.SHERPA_ONNX_VERSION }}
 
       - name: Release pre-compiled binaries and libs for macOS
         if: github.repository_owner == 'k2-fsa' && github.event_name == 'push' && contains(github.ref, 'refs/tags/') && matrix.build_type == 'Release'
@@ -228,6 +245,59 @@ jobs:
           overwrite: true
           file: sherpa-onnx-*.tar.bz2
 
+      - name: Test fa
+        if: ${{ !startsWith(github.ref, 'refs/tags/') }}
+        shell: bash
+        run: |
+          export PATH=$PWD/build/bin:$PATH
+
+          .github/scripts/test-fa.sh
+
+      - name: Show fa result zh-aishell3-pinyin
+        if: ${{ !startsWith(github.ref, 'refs/tags/') }}
+        shell: bash
+        run: cat zh-aishell3-pinyin.TextGrid
+
+      - name: Show fa result zh-biaobei-pinyin
+        if: ${{ !startsWith(github.ref, 'refs/tags/') }}
+        shell: bash
+        run: cat zh-biaobei-pinyin.TextGrid
+
+      - name: Show fa result zh-large-pinyin
+        if: ${{ !startsWith(github.ref, 'refs/tags/') }}
+        shell: bash
+        run: cat zh-large-pinyin.TextGrid
+
+      - name: Show fa result english-mfa-v2.2.1
+        if: ${{ !startsWith(github.ref, 'refs/tags/') }}
+        shell: bash
+        run: cat english-mfa-v2.2.1.TextGrid
+
+      - name: Show fa result english-mfa-v3.0.0
+        if: ${{ !startsWith(github.ref, 'refs/tags/') }}
+        shell: bash
+        run: cat english-mfa-v3.0.0.TextGrid
+
+      - name: Show fa result english-mfa-v3.1.0
+        if: ${{ !startsWith(github.ref, 'refs/tags/') }}
+        shell: bash
+        run: cat english-mfa-v3.1.0.TextGrid
+
+      - uses: actions/upload-artifact@v4
+        if: ${{ !startsWith(github.ref, 'refs/tags/') }}
+        with:
+          name: fa-textgrids-${{ matrix.build_type }}-${{ matrix.lib_type }}-tts-${{ matrix.with_tts }}-${{ matrix.os }}-${{ matrix.arch }}
+          path: |
+            ./*.TextGrid
+            ./*.wav
+
+      - name: Clean up fa files
+        if: ${{ !startsWith(github.ref, 'refs/tags/') }}
+        shell: bash
+        run: |
+          rm -rf zh-aishell3-pinyin zh-biaobei-pinyin zh-large-pinyin
+          rm -rf english-mfa-v2.2.1 english-mfa-v3.0.0 english-mfa-v3.1.0
+          rm -f ./*.TextGrid ./zh.wav ./en.wav
       - name: Test offline Cohere Transcribe
         if: matrix.build_type != 'Debug' && !startsWith(github.ref, 'refs/tags/')
         shell: bash
@@ -245,6 +315,15 @@ jobs:
           export EXE=sherpa-onnx-offline
 
           .github/scripts/test-offline-fire-red-asr.sh
+
+      - name: Test offline w2v-BERT CTC
+        if: matrix.build_type != 'Debug' && !startsWith(github.ref, 'refs/tags/')
+        shell: bash
+        run: |
+          export PATH=$PWD/build/bin:$PATH
+          export EXE=sherpa-onnx-offline
+
+          .github/scripts/test-offline-w2v-bert-ctc.sh
 
       - name: Test offline CTC
         if: ${{ !startsWith(github.ref, 'refs/tags/') }}
@@ -342,6 +421,15 @@ jobs:
 
           .github/scripts/test-offline-punctuation.sh
 
+      - name: Test offline diacritization
+        if: ${{ !startsWith(github.ref, 'refs/tags/') }}
+        shell: bash
+        run: |
+          export PATH=$PWD/build/bin:$PATH
+          export EXE=sherpa-onnx-offline-diacritization
+
+          .github/scripts/test-offline-diacritization.sh
+
       - name: Test C API
         if: ${{ !startsWith(github.ref, 'refs/tags/') }}
         shell: bash
@@ -351,6 +439,7 @@ jobs:
           export SID_EXE=speaker-identification-c-api
           export AT_EXE=audio-tagging-c-api
           export PUNCT_EXE=add-punctuation-c-api
+          export VERSION_EXE=version-c-api
 
           .github/scripts/test-c-api.sh
 

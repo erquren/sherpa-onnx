@@ -2,6 +2,8 @@ export const listRawfileDir: (mgr: object, dir: string) => Array<string>;
 
 export const readWave: (filename: string, enableExternalBuffer: boolean = true) => {samples: Float32Array, sampleRate: number};
 export const readWaveFromBinary: (data: Uint8Array, enableExternalBuffer: boolean = true) => {samples: Float32Array, sampleRate: number};
+export const readWaveMultiChannel: (filename: string, enableExternalBuffer: boolean = true) => {samples: Float32Array[], sampleRate: number};
+export const writeWaveMultiChannel: (filename: string, obj: {samples: Float32Array[], sampleRate: number}) => boolean;
 export const createCircularBuffer: (capacity: number) => object;
 export const circularBufferPush: (handle: object, samples: Float32Array) => void;
 export const circularBufferGet: (handle: object, index: number, n: number, enableExternalBuffer: boolean = true) => Float32Array;
@@ -24,12 +26,18 @@ export const createOfflineRecognizer: (config: object, mgr?: object) => object;
 export const createOfflineStream: (handle: object) => object;
 export const offlineRecognizerSetConfig: (handle: object, config: object) => void;
 export const acceptWaveformOffline: (handle: object, audio: object) => void;
+export const offlineStreamSetOption: (handle: object, key: string, value: string) => void;
+export const offlineStreamGetOption: (handle: object, key: string) => string;
+export const offlineStreamHasOption: (handle: object, key: string) => boolean;
 export const decodeOfflineStream: (handle: object, streamHandle: object) => void;
 export const getOfflineStreamResultAsJson: (streamHandle: object) => string;
 
 export const createOnlineRecognizer: (config: object, mgr?: object) => object;
 export const createOnlineStream: (handle: object) => object;
 export const acceptWaveformOnline: (handle: object, audio: object) => void;
+export const onlineStreamSetOption: (handle: object, key: string, value: string) => void;
+export const onlineStreamGetOption: (handle: object, key: string) => string;
+export const onlineStreamHasOption: (handle: object, key: string) => boolean;
 export const inputFinished: (streamHandle: object) => void;
 export const isOnlineStreamReady: (handle: object, streamHandle: object) => boolean;
 export const decodeOnlineStream: (handle: object, streamHandle: object) => void;
@@ -40,6 +48,17 @@ export const getOnlineStreamResultAsJson: (handle: object, streamHandle: object)
 export const createOfflineTts: (config: object, mgr?: object) => object;
 export const getOfflineTtsNumSpeakers: (handle: object) => number;
 export const getOfflineTtsSampleRate: (handle: object) => number;
+export const getOfflineTtsLang: (handle: object) => string;
+
+export type SourceSeparationOutput = {
+  stems: Float32Array[][];
+  sampleRate: number;
+};
+
+export const createOfflineSourceSeparation: (config: object, mgr?: object) => object;
+export const offlineSourceSeparationGetOutputSampleRate: (handle: object) => number;
+export const offlineSourceSeparationGetNumberOfStems: (handle: object) => number;
+export const offlineSourceSeparationProcess: (handle: object, input: object) => SourceSeparationOutput;
 
 export type TtsOutput = {
   samples: Float32Array;
@@ -53,6 +72,11 @@ export const offlineTtsGenerateAsyncWithConfig: (handle: object, input: object) 
 
 export const createOfflinePunctuation: (config: object, mgr?: object) => object;
 export const offlinePunctuationAddPunct: (handle: object, text: string) => string;
+export const createForcedAligner: (config: object, mgr?: object) => object;
+export const createForcedAlignerAsync: (config: object) => Promise<object>;
+export const forcedAlignerCreateStream: (handle: object) => object;
+export const forcedAlignerCompute: (handle: object, stream: object, text: string) => object;
+export const forcedAlignerComputeAsync: (handle: object, stream: object, text: string) => Promise<object>;
 export const createOnlinePunctuation: (config: object, mgr?: object) => object;
 export const onlinePunctuationAddPunct: (handle: object, text: string) => string;
 

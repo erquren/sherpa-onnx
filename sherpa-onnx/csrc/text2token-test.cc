@@ -2,13 +2,13 @@
 //
 // Copyright (c)  2024  Xiaomi Corporation
 
-#include <fstream>
 #include <memory>
 #include <sstream>
 #include <string>
 #include <vector>
 
 #include "gtest/gtest.h"
+#include "sherpa-onnx/csrc/file-utils.h"
 #include "sherpa-onnx/csrc/macros.h"
 #include "sherpa-onnx/csrc/utils.h"
 #include "ssentencepiece/csrc/ssentencepiece.h"
@@ -26,7 +26,7 @@ TEST(TEXT2TOKEN, TEST_cjkchar) {
 
   std::string tokens = oss.str();
 
-  if (!std::ifstream(tokens).good()) {
+  if (!FileExists(tokens)) {
     SHERPA_ONNX_LOGE(
         "No test data found, skipping TEST_cjkchar()."
         "You can download the test data by: "
@@ -62,7 +62,7 @@ TEST(TEXT2TOKEN, TEST_bpe) {
   oss.str("");
   oss << dir << "/text2token/bpe_en.vocab";
   std::string bpe = oss.str();
-  if (!std::ifstream(tokens).good() || !std::ifstream(bpe).good()) {
+  if (!FileExists(tokens) || !FileExists(bpe)) {
     SHERPA_ONNX_LOGE(
         "No test data found, skipping TEST_bpe()."
         "You can download the test data by: "
@@ -100,7 +100,7 @@ TEST(TEXT2TOKEN, TEST_cjkchar_bpe) {
   oss.str("");
   oss << dir << "/text2token/bpe_mix.vocab";
   std::string bpe = oss.str();
-  if (!std::ifstream(tokens).good() || !std::ifstream(bpe).good()) {
+  if (!FileExists(tokens) || !FileExists(bpe)) {
     SHERPA_ONNX_LOGE(
         "No test data found, skipping TEST_cjkchar_bpe()."
         "You can download the test data by: "
@@ -139,7 +139,7 @@ TEST(TEXT2TOKEN, TEST_bbpe) {
   oss.str("");
   oss << dir << "/text2token/bbpe.vocab";
   std::string bpe = oss.str();
-  if (!std::ifstream(tokens).good() || !std::ifstream(bpe).good()) {
+  if (!FileExists(tokens) || !FileExists(bpe)) {
     SHERPA_ONNX_LOGE(
         "No test data found, skipping TEST_bbpe()."
         "You can download the test data by: "
@@ -166,6 +166,55 @@ TEST(TEXT2TOKEN, TEST_bbpe) {
   EXPECT_EQ(ids, expected_ids);
 
   std::vector<float> expected_scores({1.0, 0});
+  EXPECT_EQ(scores, expected_scores);
+}
+
+TEST(TEXT2TOKEN, TEST_bbpe_non_cjk) {
+  // bbpe models are trained on byte_encode(tokenize_by_CJK_char(text)) in
+  // icefall, so "你好HELLO" is seen as "你 好 HELLO": one word per CJK
+  // character, while "HELLO" stays one word. A tiny vocabulary in the
+  // byte-mapped form is enough to check this. After mapping each byte,
+  // 你 is "ƋţŅ" and 好 is "ƌŋţ".
+  std::string vocab =
+      "<unk> 0\n"
+      "▁ -10\n"
+      "H -10\n"
+      "E -10\n"
+      "L -10\n"
+      "O -10\n"
+      "▁HELLO -1\n"
+      "▁ƋţŅ -1\n"
+      "▁ƌŋţ -1\n";
+  std::istringstream vocab_is(vocab);
+  auto bpe_processor =
+      std::make_unique<ssentencepiece::Ssentencepiece>(vocab_is);
+
+  std::string tokens =
+      "<unk> 0\n"
+      "▁ 1\n"
+      "H 2\n"
+      "E 3\n"
+      "L 4\n"
+      "O 5\n"
+      "▁HELLO 6\n"
+      "▁ƋţŅ 7\n"
+      "▁ƌŋţ 8\n";
+  auto sym_table = SymbolTable(tokens, false);
+
+  std::string text = "HELLO :2.0\n你好HELLO\n你好";
+  std::istringstream iss(text);
+
+  std::vector<std::vector<int32_t>> ids;
+  std::vector<float> scores;
+
+  auto r = EncodeHotwords(iss, "bbpe", sym_table, bpe_processor.get(), &ids,
+                          &scores);
+  EXPECT_TRUE(r);
+
+  std::vector<std::vector<int32_t>> expected_ids({{6}, {7, 8, 6}, {7, 8}});
+  EXPECT_EQ(ids, expected_ids);
+
+  std::vector<float> expected_scores({2.0, 0, 0});
   EXPECT_EQ(scores, expected_scores);
 }
 

@@ -3,7 +3,6 @@
 // Copyright (c)  2025  Xiaomi Corporation
 
 #include "sherpa-onnx/csrc/ten-vad-model.h"
-#include "sherpa-onnx/csrc/ort-env.h"
 
 #include <algorithm>
 #include <cmath>
@@ -38,7 +37,7 @@ class TenVadModel::Impl {
   explicit Impl(const VadModelConfig &config)
       : config_(config),
         rfft_(1024),
-        env_(CreateOrtEnv()),
+        env_(ORT_LOGGING_LEVEL_ERROR),
         sess_opts_(GetSessionOptions(config)),
         allocator_{},
         sample_rate_(config.sample_rate) {
@@ -51,7 +50,7 @@ class TenVadModel::Impl {
   Impl(Manager *mgr, const VadModelConfig &config)
       : config_(config),
         rfft_(1024),
-        env_(CreateOrtEnv()),
+        env_(ORT_LOGGING_LEVEL_ERROR),
         sess_opts_(GetSessionOptions(config)),
         allocator_{},
         sample_rate_(config.sample_rate) {
@@ -211,8 +210,8 @@ class TenVadModel::Impl {
     min_speech_samples_ = sample_rate_ * config_.ten_vad.min_speech_duration;
 
     if (model_data) {
-      sess_ = std::make_unique<Ort::Session>(
-          env_, model_data, model_data_length, sess_opts_);
+      sess_ = std::make_unique<Ort::Session>(env_, model_data,
+                                             model_data_length, sess_opts_);
     } else if (!sess_) {
       SHERPA_ONNX_LOGE(
           "Please pass model data or initialize the session outside of "
@@ -431,8 +430,8 @@ class TenVadModel::Impl {
 
   std::vector<Ort::Value> states_;
   int64_t sample_rate_;
-  int32_t min_silence_samples_;
-  int32_t min_speech_samples_;
+  int32_t min_silence_samples_ = 0;
+  int32_t min_speech_samples_ = 0;
 
   bool triggered_ = false;
   int32_t current_sample_ = 0;

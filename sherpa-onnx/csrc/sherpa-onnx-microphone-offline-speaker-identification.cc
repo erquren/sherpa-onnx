@@ -17,6 +17,7 @@
 #include <vector>
 
 #include "portaudio.h"  // NOLINT
+#include "sherpa-onnx/csrc/file-utils.h"
 #include "sherpa-onnx/csrc/macros.h"
 #include "sherpa-onnx/csrc/microphone.h"
 #include "sherpa-onnx/csrc/speaker-embedding-extractor.h"
@@ -50,7 +51,7 @@ static void DetectKeyPress() {
         SHERPA_ONNX_LOGE("\nStart recording. Press Enter to stop recording");
         state = State::kRecording;
         {
-          std::lock_guard<std::mutex> lock(samples_mutex);
+          std::scoped_lock lock(samples_mutex);
           samples.clear();
         }
         break;
@@ -70,7 +71,7 @@ static int32_t RecordCallback(const void *input_buffer,
                               const PaStreamCallbackTimeInfo * /*time_info*/,
                               PaStreamCallbackFlags /*status_flags*/,
                               void *user_data) {
-  std::lock_guard<std::mutex> lock(samples_mutex);
+  std::scoped_lock lock(samples_mutex);
 
   auto p = reinterpret_cast<const float *>(input_buffer);
   samples.insert(samples.end(), p, p + frames_per_buffer);
@@ -114,7 +115,7 @@ static std::unordered_map<std::string, std::vector<std::string>>
 ReadSpeakerFile(const std::string &filename) {
   std::unordered_map<std::string, std::vector<std::string>> ans;
 
-  std::ifstream is(filename);
+  auto is = sherpa_onnx::OpenInputFile(filename);
   if (!is) {
     fprintf(stderr, "Failed to open %s", filename.c_str());
     SHERPA_ONNX_EXIT(0);
@@ -264,7 +265,7 @@ Note that `zh` means Chinese, while `en` means English.
       case State::kComputing: {
         std::vector<float> buf;
         {
-          std::lock_guard<std::mutex> lock(samples_mutex);
+          std::scoped_lock lock(samples_mutex);
           buf = std::move(samples);
         }
 

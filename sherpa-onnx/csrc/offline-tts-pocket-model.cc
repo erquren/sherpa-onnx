@@ -3,7 +3,6 @@
 // Copyright (c)  2026  Xiaomi Corporation
 
 #include "sherpa-onnx/csrc/offline-tts-pocket-model.h"
-#include "sherpa-onnx/csrc/ort-env.h"
 
 #include <memory>
 #include <string>
@@ -20,11 +19,11 @@
 #include "rawfile/raw_file_manager.h"
 #endif
 
+#include "sherpa-onnx/csrc/file-utils.h"
 #include "sherpa-onnx/csrc/macros.h"
 #include "sherpa-onnx/csrc/onnx-utils.h"
 #include "sherpa-onnx/csrc/session.h"
 #include "sherpa-onnx/csrc/text-utils.h"
-#include "sherpa-onnx/csrc/file-utils.h"
 
 namespace sherpa_onnx {
 
@@ -51,7 +50,7 @@ static Ort::Value CreateZeroTensorLike(Ort::Session &sess, int32_t input_index,
       break;
     case ONNX_TENSOR_ELEMENT_DATA_TYPE_BOOL:
       v = Ort::Value::CreateTensor<bool>(allocator, shape.data(), shape.size());
-      Fill<bool>(&v, 0);
+      Fill<bool>(&v, false);
       break;
     case ONNX_TENSOR_ELEMENT_DATA_TYPE_INT64:
       v = Ort::Value::CreateTensor<int64_t>(allocator, shape.data(),
@@ -70,7 +69,7 @@ class OfflineTtsPocketModel::Impl {
  public:
   explicit Impl(const OfflineTtsModelConfig &config)
       : config_(config),
-        env_(CreateOrtEnv()),
+        env_(ORT_LOGGING_LEVEL_ERROR),
         sess_opts_(GetSessionOptions(config)) {
     lm_flow_sess_ = std::make_unique<Ort::Session>(
         env_, SHERPA_ONNX_TO_ORT_PATH(config.pocket.lm_flow), sess_opts_);
@@ -97,7 +96,7 @@ class OfflineTtsPocketModel::Impl {
   template <typename Manager>
   Impl(Manager *mgr, const OfflineTtsModelConfig &config)
       : config_(config),
-        env_(CreateOrtEnv()),
+        env_(ORT_LOGGING_LEVEL_ERROR),
         sess_opts_(GetSessionOptions(config)) {
     {
       auto buf = ReadFile(mgr, config.pocket.lm_flow);

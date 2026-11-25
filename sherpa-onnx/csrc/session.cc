@@ -12,6 +12,7 @@
 #include <utility>
 #include <vector>
 
+#include "sherpa-onnx/csrc/file-utils.h"
 #include "sherpa-onnx/csrc/macros.h"
 #include "sherpa-onnx/csrc/provider.h"
 #include "sherpa-onnx/csrc/text-utils.h"
@@ -54,11 +55,19 @@ static void ParseConfigFile(
   // For spacemit, the config file can contain the following
   // SPACEMIT_EP_USE_GLOBAL_INTRA_THREAD=1
   // ... and so on.
+  // Keys prefixed with "SessionConfig." are forwarded (prefix stripped) to
+  // Ort::SessionOptions::AddConfigEntry, e.g.,
+  // SessionConfig.mlas.disable_kleidiai=1
+  // Remaining keys are forwarded as provider options for providers that
+  // accept them, e.g., for cuda:
+  //   gpu_mem_limit=2147483648
+  //   arena_extend_strategy=kSameAsRequested
+  //   do_copy_in_default_stream=1
   // # is treated as comment. Empty lines are ignored. The legacy key:value
   // format is still supported for backward compatibility.
   // additionally, DEBUG=1 can be set to print all configs read from the file.
 
-  std::ifstream is(config_path);
+  auto is = OpenInputFile(config_path);
   if (!is.is_open()) {
     SHERPA_ONNX_LOGE("Failed to open provider config file: %s",
                      config_path.c_str());
@@ -99,7 +108,8 @@ static void SplitProviderAndConfig(
     std::unordered_map<std::string, std::string> &config) {
   // provider string format: provider_name[:config_path], e.g.,
   // tensorrt:trt_config.config or spacemit:spacemit_config.config or cpu. The
-  // config file is optional. If it is not provided, default config will be used.
+  // config file is optional. If it is not provided, default config will be
+  // used.
   provider_str = Trim(s);
   config.clear();
 
@@ -131,9 +141,102 @@ static void SplitProviderAndConfig(
   }
 }
 
+static const char *CudnnConvAlgoSearchToString(OrtCudnnConvAlgoSearch search) {
+  switch (search) {
+    case OrtCudnnConvAlgoSearchExhaustive:
+      return "EXHAUSTIVE";
+    case OrtCudnnConvAlgoSearchHeuristic:
+      return "HEURISTIC";
+    case OrtCudnnConvAlgoSearchDefault:
+      return "DEFAULT";
+    default:
+      return "HEURISTIC";
+  }
+}
+
+std::unordered_map<std::string, std::string> BuildCudaProviderOptions(
+    std::unordered_map<std::string, std::string> config, int32_t device_id,
+    OrtCudnnConvAlgoSearch cudnn_conv_algo_search) {
+  config.erase("DEBUG");
+  // emplace() does not overwrite existing keys, so entries from the config
+  // file win over the defaults below.
+  config.emplace("device_id", std::to_string(device_id));
+  config.emplace("cudnn_conv_algo_search",
+                 CudnnConvAlgoSearchToString(cudnn_conv_algo_search));
+  return config;
+}
+
+bool GetCudaDeviceId(
+    const std::unordered_map<std::string, std::string> &options,
+    int32_t *device_id) {
+  auto it = options.find("device_id");
+  int32_t parsed_device_id = 0;
+  if (it == options.end() ||
+      it->second.find('\0') != std::string::npos ||
+      !ConvertStringToInteger(it->second, &parsed_device_id) ||
+      parsed_device_id < 0) {
+    return false;
+  }
+  *device_id = parsed_device_id;
+  return true;
+}
+
+#if ORT_API_VERSION >= 12
+static bool AppendCudaProviderV2(
+    Ort::SessionOptions *sess_opts,
+    const std::unordered_map<std::string, std::string> &provider_options,
+    const std::string &available_providers) {
+  std::vector<const char *> option_keys;
+  std::vector<const char *> option_values;
+  option_keys.reserve(provider_options.size());
+  option_values.reserve(provider_options.size());
+  for (const auto &kv : provider_options) {
+    option_keys.push_back(kv.first.c_str());
+    option_values.push_back(kv.second.c_str());
+  }
+
+  const auto &api = Ort::GetApi();
+  OrtCUDAProviderOptionsV2 *cuda_options = nullptr;
+  OrtStatus *status = api.CreateCUDAProviderOptions(&cuda_options);
+  if (status == nullptr) {
+    status =
+        api.UpdateCUDAProviderOptions(cuda_options, option_keys.data(),
+                                      option_values.data(), option_keys.size());
+  }
+  if (status == nullptr) {
+    status = api.SessionOptionsAppendExecutionProvider_CUDA_V2(*sess_opts,
+                                                               cuda_options);
+  }
+
+  const bool success = status == nullptr;
+  if (status != nullptr) {
+    const char *msg = api.GetErrorMessage(status);
+    SHERPA_ONNX_LOGE(
+        "Failed to enable CUDA: %s. Available providers: %s. Fallback to cpu",
+        msg, available_providers.c_str());
+    api.ReleaseStatus(status);
+  }
+  if (cuda_options != nullptr) {
+    api.ReleaseCUDAProviderOptions(cuda_options);
+  }
+  return success;
+}
+#endif
+
 Ort::SessionOptions GetSessionOptionsImpl(
     int32_t num_threads, const std::string &provider_str,
     const ProviderConfig *provider_config /*= nullptr*/) {
+  return GetSessionOptionsImpl(num_threads, provider_str, provider_config,
+                               nullptr);
+}
+
+Ort::SessionOptions GetSessionOptionsImpl(
+    int32_t num_threads, const std::string &provider_str,
+    const ProviderConfig *provider_config,
+    CudaProviderInfo *cuda_provider_info) {
+  if (cuda_provider_info != nullptr) {
+    *cuda_provider_info = {};
+  }
   std::unordered_map<std::string, std::string> config;
   std::string new_provider_str;
 
@@ -144,13 +247,7 @@ Ort::SessionOptions GetSessionOptionsImpl(
   Ort::SessionOptions sess_opts;
   sess_opts.SetIntraOpNumThreads(num_threads);
 
-#if SHERPA_ONNX_ENABLE_WASM
-  // ORT's wasm-with-pthreads prebuild shares one libc pthread pool between
-  // intra-op and inter-op threads; inter_op > 1 starves the intra-op pool.
-  sess_opts.SetInterOpNumThreads(1);
-#else
   sess_opts.SetInterOpNumThreads(num_threads);
-#endif
 
   std::vector<std::string> available_providers = Ort::GetAvailableProviders();
   std::ostringstream os;
@@ -159,7 +256,9 @@ Ort::SessionOptions GetSessionOptionsImpl(
   }
 
   // Other possible options
-  if (config.find("GraphOptimizationLevel") != config.end()) {
+  bool has_graph_optimization_level =
+      config.find("GraphOptimizationLevel") != config.end();
+  if (has_graph_optimization_level) {
     int32_t graph_optimization_level = ToIntOrDefault(
         config["GraphOptimizationLevel"],
         static_cast<int32_t>(GraphOptimizationLevel::ORT_ENABLE_ALL));
@@ -178,13 +277,13 @@ Ort::SessionOptions GetSessionOptionsImpl(
   }
 
   if (config.find("ProfilingFilePrefix") != config.end()) {
-    sess_opts.EnableProfiling(SHERPA_ONNX_TO_ORT_PATH(config["ProfilingFilePrefix"]));
+    sess_opts.EnableProfiling(
+        SHERPA_ONNX_TO_ORT_PATH(config["ProfilingFilePrefix"]));
     config.erase("ProfilingFilePrefix");
   }
 
   if (config.find("EnableMemPattern") != config.end()) {
-    int32_t enable_mem_pattern =
-        ToIntOrDefault(config["EnableMemPattern"], 1);
+    int32_t enable_mem_pattern = ToIntOrDefault(config["EnableMemPattern"], 1);
     if (enable_mem_pattern == 0) {
       sess_opts.DisableMemPattern();
     }
@@ -198,6 +297,36 @@ Ort::SessionOptions GetSessionOptionsImpl(
       sess_opts.DisableCpuMemArena();
     }
     config.erase("EnableCpuMemArena");
+  }
+
+  // Keys prefixed with "SessionConfig." are forwarded verbatim (prefix
+  // stripped) to Ort::SessionOptions::AddConfigEntry, e.g.,
+  //   SessionConfig.mlas.disable_kleidiai=1
+  // becomes AddConfigEntry("mlas.disable_kleidiai", "1"). This exposes
+  // onnxruntime session configuration entries
+  // (see onnxruntime_session_options_config_keys.h) without requiring a
+  // dedicated sherpa-onnx option for each of them. Only this explicit
+  // namespace is forwarded, so provider-specific and other un-prefixed keys
+  // retain their current behavior.
+  {
+    static constexpr const char kSessionConfigPrefix[] = "SessionConfig.";
+    static constexpr size_t kSessionConfigPrefixLen =
+        sizeof(kSessionConfigPrefix) - 1;
+    for (auto it = config.begin(); it != config.end();) {
+      if (it->first.compare(0, kSessionConfigPrefixLen, kSessionConfigPrefix) ==
+          0) {
+        std::string key = it->first.substr(kSessionConfigPrefixLen);
+        if (key.empty()) {
+          SHERPA_ONNX_LOGE("Ignore empty session config key: %s",
+                           it->first.c_str());
+        } else {
+          sess_opts.AddConfigEntry(key.c_str(), it->second.c_str());
+        }
+        it = config.erase(it);
+      } else {
+        ++it;
+      }
+    }
   }
 
   // If you want to speed up initialization, please uncomment the following line
@@ -302,20 +431,41 @@ Ort::SessionOptions GetSessionOptionsImpl(
     case Provider::kCUDA: {
       if (std::find(available_providers.begin(), available_providers.end(),
                     "CUDAExecutionProvider") != available_providers.end()) {
-        // The CUDA provider is available, proceed with setting the options
-        OrtCUDAProviderOptions options;
-
+        int32_t device_id = 0;
+        // Default OrtCudnnConvAlgoSearchExhaustive is extremely slow
+        auto algo_search = OrtCudnnConvAlgoSearchHeuristic;
         if (provider_config != nullptr) {
-          options.device_id = provider_config->device;
-          options.cudnn_conv_algo_search = OrtCudnnConvAlgoSearch(
+          device_id = provider_config->device;
+          algo_search = static_cast<OrtCudnnConvAlgoSearch>(
               provider_config->cuda_config.cudnn_conv_algo_search);
-        } else {
-          options.device_id = 0;
-          // Default OrtCudnnConvAlgoSearchExhaustive is extremely slow
-          options.cudnn_conv_algo_search = OrtCudnnConvAlgoSearchHeuristic;
-          // set more options on need
         }
+#if ORT_API_VERSION >= 12
+        // Remaining keys from the config file are forwarded verbatim to the
+        // CUDA EP, e.g., gpu_mem_limit, arena_extend_strategy,
+        // do_copy_in_default_stream. See
+        // https://onnxruntime.ai/docs/execution-providers/CUDA-ExecutionProvider.html
+        // On the intentional TensorRT-to-CUDA fallthrough the config keys
+        // are meant for TensorRT; forwarding them would make ORT reject
+        // unknown options and lose the GPU fallback entirely.
+        const std::unordered_map<std::string, std::string> kNoConfig;
+        auto cuda_options = BuildCudaProviderOptions(
+            p == Provider::kCUDA ? config : kNoConfig, device_id, algo_search);
+        if (!GetCudaDeviceId(cuda_options, &device_id)) {
+          SHERPA_ONNX_LOGE("Invalid CUDA device_id. CUDA provider is disabled");
+          break;
+        }
+        if (!AppendCudaProviderV2(&sess_opts, cuda_options, os.str())) {
+          break;
+        }
+#else
+        OrtCUDAProviderOptions options;
+        options.device_id = device_id;
+        options.cudnn_conv_algo_search = algo_search;
         sess_opts.AppendExecutionProvider_CUDA(options);
+#endif
+        if (cuda_provider_info != nullptr) {
+          *cuda_provider_info = {true, device_id};
+        }
       } else {
         SHERPA_ONNX_LOGE(
             "Please compile with -DSHERPA_ONNX_ENABLE_GPU=ON. Available "
@@ -424,6 +574,61 @@ Ort::SessionOptions GetSessionOptionsImpl(
 #endif
       break;
     }
+    case Provider::kOpenVINO: {
+#if ORT_API_VERSION >= 17
+      if (std::find(available_providers.begin(), available_providers.end(),
+                    "OpenVINOExecutionProvider") == available_providers.end()) {
+        SHERPA_ONNX_LOGE(
+            "OpenVINOExecutionProvider is not available. Install an "
+            "OpenVINO-enabled ONNX Runtime. Available providers: %s. "
+            "Fallback to cpu!",
+            os.str().c_str());
+        break;
+      }
+
+      std::unordered_map<std::string, std::string> provider_options(config);
+      provider_options.erase("DEBUG");
+      if (provider_options.find("device_type") == provider_options.end()) {
+        provider_options.emplace("device_type", "NPU");
+      }
+
+      std::vector<const char *> option_keys;
+      std::vector<const char *> option_values;
+      option_keys.reserve(provider_options.size());
+      option_values.reserve(provider_options.size());
+      for (const auto &kv : provider_options) {
+        option_keys.push_back(kv.first.c_str());
+        option_values.push_back(kv.second.c_str());
+      }
+
+      const auto &api = Ort::GetApi();
+      OrtStatus *status = api.SessionOptionsAppendExecutionProvider_OpenVINO_V2(
+          sess_opts, option_keys.data(), option_values.data(),
+          option_keys.size());
+      if (status) {
+        const char *msg = api.GetErrorMessage(status);
+        SHERPA_ONNX_LOGE(
+            "Failed to enable OpenVINO Execution Provider: %s. Available "
+            "providers: %s. Fallback to cpu",
+            msg, os.str().c_str());
+        api.ReleaseStatus(status);
+      } else if (!has_graph_optimization_level) {
+        // OpenVINO performs its own graph optimizations and recommends
+        // receiving the original ONNX graph. Only disable ORT optimizations
+        // after successfully enabling OpenVINO so that a CPU fallback keeps
+        // its normal optimization level. Users can override this in the
+        // config file.
+        sess_opts.SetGraphOptimizationLevel(
+            GraphOptimizationLevel::ORT_DISABLE_ALL);
+      }
+#else
+      SHERPA_ONNX_LOGE(
+          "OpenVINO requires ONNX Runtime 1.17 or newer. Current API version: "
+          "%d. Fallback to cpu!",
+          static_cast<int32_t>(ORT_API_VERSION));
+#endif
+      break;
+    }
   }
   return sess_opts;
 }
@@ -443,6 +648,17 @@ Ort::SessionOptions GetSessionOptions(const OnlineModelConfig &config,
   if (config.provider_config.provider == "trt" &&
       (model_type == "decoder" || model_type == "joiner")) {
     return GetSessionOptionsImpl(config.num_threads, "cuda",
+                                 &config.provider_config);
+  }
+
+  // The transducer decoder and joiner are tiny, latency-sensitive graphs.
+  // Keep them on CPU for OpenVINO: the encoder contains nearly all of the
+  // compute and is the graph that benefits from NPU acceleration.
+  std::string provider_name = config.provider_config.provider.substr(
+      0, config.provider_config.provider.find(':'));
+  if (ToLowerAscii(provider_name) == "openvino" &&
+      (model_type == "decoder" || model_type == "joiner")) {
+    return GetSessionOptionsImpl(config.num_threads, "cpu",
                                  &config.provider_config);
   }
   return GetSessionOptionsImpl(config.num_threads,

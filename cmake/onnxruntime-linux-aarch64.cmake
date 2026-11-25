@@ -14,19 +14,18 @@ if(NOT BUILD_SHARED_LIBS)
   message(FATAL_ERROR "This file is for building shared libraries. BUILD_SHARED_LIBS: ${BUILD_SHARED_LIBS}")
 endif()
 
-set(onnxruntime_URL  "https://github.com/csukuangfj/onnxruntime-libs/releases/download/v1.24.4/onnxruntime-linux-aarch64-glibc2_17-Release-1.24.4.zip")
-set(onnxruntime_URL2 "https://hf-mirror.com/csukuangfj/onnxruntime-libs/resolve/main/1.24.4/onnxruntime-linux-aarch64-glibc2_17-Release-1.24.4.zip")
-set(onnxruntime_HASH "SHA256=c6a1971a8bfc8eaa07d48478d796245a747e75f510859574c9253dc7f1e9dc9a")
+set(onnxruntime_URL  "https://github.com/csukuangfj/onnxruntime-libs/releases/download/v1.28.2/onnxruntime-linux-aarch64-glibc2_17-Release-1.28.2.zip")
+set(onnxruntime_HASH "SHA256=28083273643f40fa6477ef9d53986fe216304710c4b1c743b217a4effd016339")
 
 # If you don't have access to the Internet,
 # please download onnxruntime to one of the following locations.
 # You can add more if you want.
 set(possible_file_locations
-  $ENV{HOME}/Downloads/onnxruntime-linux-aarch64-glibc2_17-Release-1.24.4.zip
-  ${CMAKE_SOURCE_DIR}/onnxruntime-linux-aarch64-glibc2_17-Release-1.24.4.zip
-  ${CMAKE_BINARY_DIR}/onnxruntime-linux-aarch64-glibc2_17-Release-1.24.4.zip
-  /tmp/onnxruntime-linux-aarch64-glibc2_17-Release-1.24.4.zip
-  /star-fj/fangjun/download/github/onnxruntime-linux-aarch64-glibc2_17-Release-1.24.4.zip
+  $ENV{HOME}/Downloads/onnxruntime-linux-aarch64-glibc2_17-Release-1.28.2.zip
+  ${CMAKE_SOURCE_DIR}/onnxruntime-linux-aarch64-glibc2_17-Release-1.28.2.zip
+  ${CMAKE_BINARY_DIR}/onnxruntime-linux-aarch64-glibc2_17-Release-1.28.2.zip
+  /tmp/onnxruntime-linux-aarch64-glibc2_17-Release-1.28.2.zip
+  /star-fj/fangjun/download/github/onnxruntime-linux-aarch64-glibc2_17-Release-1.28.2.zip
 )
 
 foreach(f IN LISTS possible_file_locations)
@@ -34,7 +33,6 @@ foreach(f IN LISTS possible_file_locations)
     set(onnxruntime_URL  "${f}")
     file(TO_CMAKE_PATH "${onnxruntime_URL}" onnxruntime_URL)
     message(STATUS "Found local downloaded onnxruntime: ${onnxruntime_URL}")
-    set(onnxruntime_URL2)
     break()
   endif()
 endforeach()
@@ -42,7 +40,6 @@ endforeach()
 FetchContent_Declare(onnxruntime
   URL
     ${onnxruntime_URL}
-    ${onnxruntime_URL2}
   URL_HASH          ${onnxruntime_HASH}
 )
 

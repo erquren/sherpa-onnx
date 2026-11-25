@@ -1,12 +1,15 @@
 // scripts/node-addon-api/src/non-streaming-asr.cc
 //
 // Copyright (c)  2024  Xiaomi Corporation
+#include <algorithm>
 #include <memory>
 #include <sstream>
+#include <string>
 
 #include "macros.h"  // NOLINT
 #include "napi.h"    // NOLINT
 #include "sherpa-onnx/c-api/c-api.h"
+#include "typed-array.h"  // NOLINT
 
 // defined in ./streaming-asr.cc
 SherpaOnnxFeatureConfig GetFeatureConfig(Napi::Object obj);
@@ -380,14 +383,7 @@ static SherpaOnnxOfflineModelConfig GetOfflineModelConfig(Napi::Object obj) {
   SHERPA_ONNX_ASSIGN_ATTR_STR(tokens, tokens);
   SHERPA_ONNX_ASSIGN_ATTR_INT32(num_threads, numThreads);
 
-  if (o.Has("debug") &&
-      (o.Get("debug").IsNumber() || o.Get("debug").IsBoolean())) {
-    if (o.Get("debug").IsBoolean()) {
-      c.debug = o.Get("debug").As<Napi::Boolean>().Value();
-    } else {
-      c.debug = o.Get("debug").As<Napi::Number>().Int32Value();
-    }
-  }
+  SHERPA_ONNX_ASSIGN_ATTR_BOOL(debug, debug);
 
   SHERPA_ONNX_ASSIGN_ATTR_STR(provider, provider);
   SHERPA_ONNX_ASSIGN_ATTR_STR(model_type, modelType);
@@ -414,6 +410,24 @@ static SherpaOnnxOfflineLMConfig GetOfflineLMConfig(Napi::Object obj) {
   return c;
 }
 
+static SherpaOnnxOfflineCtcFstDecoderConfig GetOfflineCtcFstDecoderConfig(
+    Napi::Object obj) {
+  SherpaOnnxOfflineCtcFstDecoderConfig c;
+  memset(&c, 0, sizeof(c));
+
+  if (!obj.Has("ctcFstDecoderConfig") ||
+      !obj.Get("ctcFstDecoderConfig").IsObject()) {
+    return c;
+  }
+
+  Napi::Object o = obj.Get("ctcFstDecoderConfig").As<Napi::Object>();
+
+  SHERPA_ONNX_ASSIGN_ATTR_STR(graph, graph);
+  SHERPA_ONNX_ASSIGN_ATTR_INT32(max_active, maxActive);
+
+  return c;
+}
+
 static SherpaOnnxOfflineRecognizerConfig ParseConfig(Napi::Object o) {
   SherpaOnnxOfflineRecognizerConfig c;
   memset(&c, 0, sizeof(c));
@@ -421,6 +435,7 @@ static SherpaOnnxOfflineRecognizerConfig ParseConfig(Napi::Object o) {
   c.model_config = GetOfflineModelConfig(o);
   c.lm_config = GetOfflineLMConfig(o);
   c.hr = GetHomophoneReplacerConfig(o);
+  c.ctc_fst_decoder_config = GetOfflineCtcFstDecoderConfig(o);
 
   SHERPA_ONNX_ASSIGN_ATTR_STR(decoding_method, decodingMethod);
   SHERPA_ONNX_ASSIGN_ATTR_INT32(max_active_paths, maxActivePaths);
@@ -509,6 +524,7 @@ static void FreeConfig(const SherpaOnnxOfflineRecognizerConfig &c) {
   SHERPA_ONNX_DELETE_C_STR(c.rule_fars);
   SHERPA_ONNX_DELETE_C_STR(c.hr.lexicon);
   SHERPA_ONNX_DELETE_C_STR(c.hr.rule_fsts);
+  SHERPA_ONNX_DELETE_C_STR(c.ctc_fst_decoder_config.graph);
 }
 
 static Napi::External<SherpaOnnxOfflineRecognizer>
@@ -649,9 +665,9 @@ Napi::Value CreateOfflineRecognizerAsyncWrapper(
 static Napi::External<SherpaOnnxOfflineStream> CreateOfflineStreamWrapper(
     const Napi::CallbackInfo &info) {
   Napi::Env env = info.Env();
-  if (info.Length() != 1) {
+  if (info.Length() != 1 && info.Length() != 2) {
     std::ostringstream os;
-    os << "Expect only 1 argument. Given: " << info.Length();
+    os << "Expect only 1 or 2 arguments. Given: " << info.Length();
 
     Napi::TypeError::New(env, os.str()).ThrowAsJavaScriptException();
 
@@ -661,7 +677,7 @@ static Napi::External<SherpaOnnxOfflineStream> CreateOfflineStreamWrapper(
   if (!info[0].IsExternal()) {
     Napi::TypeError::New(
         env,
-        "You should pass an offline recognizer pointer as the only argument")
+        "You should pass an offline recognizer pointer as the first argument")
         .ThrowAsJavaScriptException();
 
     return {};
@@ -670,8 +686,32 @@ static Napi::External<SherpaOnnxOfflineStream> CreateOfflineStreamWrapper(
   const SherpaOnnxOfflineRecognizer *recognizer =
       info[0].As<Napi::External<SherpaOnnxOfflineRecognizer>>().Data();
 
-  const SherpaOnnxOfflineStream *stream =
-      SherpaOnnxCreateOfflineStream(recognizer);
+  const SherpaOnnxOfflineStream *stream = nullptr;
+  if (info.Length() == 2) {
+    // Optional per-stream hotwords for contextual biasing. Note that only
+    // transducer models decoded with modified_beam_search support hotwords.
+    if (!info[1].IsString()) {
+      Napi::TypeError::New(env, "Argument 2 should be a string.")
+          .ThrowAsJavaScriptException();
+
+      return {};
+    }
+
+    std::string hotwords = info[1].As<Napi::String>().Utf8Value();
+    stream =
+        SherpaOnnxCreateOfflineStreamWithHotwords(recognizer, hotwords.c_str());
+  } else {
+    stream = SherpaOnnxCreateOfflineStream(recognizer);
+  }
+
+  if (!stream) {
+    Napi::TypeError::New(env,
+                         "Failed to create offline stream. Please check if "
+                         "your model and decoding method support hotwords.")
+        .ThrowAsJavaScriptException();
+
+    return {};
+  }
 
   return Napi::External<SherpaOnnxOfflineStream>::New(
       env, const_cast<SherpaOnnxOfflineStream *>(stream),
@@ -743,15 +783,8 @@ static void AcceptWaveformOfflineWrapper(const Napi::CallbackInfo &info) {
   Napi::Float32Array samples = obj.Get("samples").As<Napi::Float32Array>();
   int32_t sample_rate = obj.Get("sampleRate").As<Napi::Number>().Int32Value();
 
-#if __OHOS__
-  // Note(fangjun): For unknown reasons on HarmonyOS, we need to divide it by
-  // sizeof(float) here
   SherpaOnnxAcceptWaveformOffline(stream, sample_rate, samples.Data(),
-                                  samples.ElementLength() / sizeof(float));
-#else
-  SherpaOnnxAcceptWaveformOffline(stream, sample_rate, samples.Data(),
-                                  samples.ElementLength());
-#endif
+                                  GetFloat32ArrayElementLength(samples));
 }
 
 static void OfflineStreamSetOptionWrapper(const Napi::CallbackInfo &info) {
@@ -782,6 +815,80 @@ static void OfflineStreamSetOptionWrapper(const Napi::CallbackInfo &info) {
   std::string key = info[1].As<Napi::String>().Utf8Value();
   std::string value = info[2].As<Napi::String>().Utf8Value();
   SherpaOnnxOfflineStreamSetOption(stream, key.c_str(), value.c_str());
+}
+
+static Napi::String OfflineStreamGetOptionWrapper(
+    const Napi::CallbackInfo &info) {
+  Napi::Env env = info.Env();
+
+  if (info.Length() != 2) {
+    std::ostringstream os;
+    os << "Expect only 2 arguments. Given: " << info.Length();
+    Napi::TypeError::New(env, os.str()).ThrowAsJavaScriptException();
+
+    return {};
+  }
+
+  if (!info[0].IsExternal()) {
+    Napi::TypeError::New(env, "Argument 0 should be an offline stream pointer.")
+        .ThrowAsJavaScriptException();
+
+    return {};
+  }
+
+  if (!info[1].IsString()) {
+    Napi::TypeError::New(env, "Argument 1 should be a string.")
+        .ThrowAsJavaScriptException();
+
+    return {};
+  }
+
+  const SherpaOnnxOfflineStream *stream =
+      info[0].As<Napi::External<SherpaOnnxOfflineStream>>().Data();
+
+  std::string key = info[1].As<Napi::String>().Utf8Value();
+
+  // The returned pointer is owned by the stream and is an empty string if the
+  // option has not been set, so copy it into a JS string right away.
+  const char *value = SherpaOnnxOfflineStreamGetOption(stream, key.c_str());
+
+  return Napi::String::New(env, value ? value : "");
+}
+
+static Napi::Boolean OfflineStreamHasOptionWrapper(
+    const Napi::CallbackInfo &info) {
+  Napi::Env env = info.Env();
+
+  if (info.Length() != 2) {
+    std::ostringstream os;
+    os << "Expect only 2 arguments. Given: " << info.Length();
+    Napi::TypeError::New(env, os.str()).ThrowAsJavaScriptException();
+
+    return {};
+  }
+
+  if (!info[0].IsExternal()) {
+    Napi::TypeError::New(env, "Argument 0 should be an offline stream pointer.")
+        .ThrowAsJavaScriptException();
+
+    return {};
+  }
+
+  if (!info[1].IsString()) {
+    Napi::TypeError::New(env, "Argument 1 should be a string.")
+        .ThrowAsJavaScriptException();
+
+    return {};
+  }
+
+  const SherpaOnnxOfflineStream *stream =
+      info[0].As<Napi::External<SherpaOnnxOfflineStream>>().Data();
+
+  std::string key = info[1].As<Napi::String>().Utf8Value();
+
+  int32_t has_option = SherpaOnnxOfflineStreamHasOption(stream, key.c_str());
+
+  return Napi::Boolean::New(env, has_option);
 }
 
 static void OfflineRecognizerSetConfigWrapper(const Napi::CallbackInfo &info) {
@@ -823,13 +930,20 @@ static void OfflineRecognizerSetConfigWrapper(const Napi::CallbackInfo &info) {
 
 class DecodeOfflineStreamAsyncWorker : public Napi::AsyncWorker {
  public:
-  DecodeOfflineStreamAsyncWorker(Napi::Env env,
-                                 const SherpaOnnxOfflineRecognizer *recognizer,
-                                 const SherpaOnnxOfflineStream *stream,
-                                 Napi::Promise::Deferred deferred)
+  DecodeOfflineStreamAsyncWorker(
+      Napi::Env env, Napi::External<SherpaOnnxOfflineRecognizer> recognizer,
+      Napi::External<SherpaOnnxOfflineStream> stream,
+      Napi::Promise::Deferred deferred)
       : Napi::AsyncWorker(env),
-        recognizer_(recognizer),
-        stream_(stream),
+        recognizer_(recognizer.Data()),
+        stream_(stream.Data()),
+        // Keep the two External handles alive for the whole worker: their
+        // finalizers free the native objects, so without these references
+        // a garbage collection during Execute() would free them under us.
+        // The references are released on the JavaScript thread in OnOK()/
+        // OnError().
+        recognizer_ref_(Napi::Persistent(recognizer)),
+        stream_ref_(Napi::Persistent(stream)),
         deferred_(deferred) {}
 
   void Execute() override {
@@ -842,16 +956,27 @@ class DecodeOfflineStreamAsyncWorker : public Napi::AsyncWorker {
 
   void OnOK() override {
     const char *json = SherpaOnnxGetOfflineStreamResultAsJson(stream_);
+
+    recognizer_ref_.Reset();
+    stream_ref_.Reset();
+
     Napi::String s = Napi::String::New(Env(), json);
     SherpaOnnxDestroyOfflineStreamResultJson(json);
     deferred_.Resolve(s);
   }
 
-  void OnError(const Napi::Error &e) override { deferred_.Reject(e.Value()); }
+  void OnError(const Napi::Error &e) override {
+    recognizer_ref_.Reset();
+    stream_ref_.Reset();
+
+    deferred_.Reject(e.Value());
+  }
 
  private:
   const SherpaOnnxOfflineRecognizer *recognizer_;
   const SherpaOnnxOfflineStream *stream_;
+  Napi::Reference<Napi::External<SherpaOnnxOfflineRecognizer>> recognizer_ref_;
+  Napi::Reference<Napi::External<SherpaOnnxOfflineStream>> stream_ref_;
   Napi::Promise::Deferred deferred_;
 };
 
@@ -873,11 +998,11 @@ static Napi::Value DecodeOfflineStreamAsyncWrapper(
     return env.Null();
   }
 
-  const SherpaOnnxOfflineRecognizer *recognizer =
-      info[0].As<Napi::External<SherpaOnnxOfflineRecognizer>>().Data();
+  Napi::External<SherpaOnnxOfflineRecognizer> recognizer =
+      info[0].As<Napi::External<SherpaOnnxOfflineRecognizer>>();
 
-  const SherpaOnnxOfflineStream *stream =
-      info[1].As<Napi::External<SherpaOnnxOfflineStream>>().Data();
+  Napi::External<SherpaOnnxOfflineStream> stream =
+      info[1].As<Napi::External<SherpaOnnxOfflineStream>>();
 
   Napi::Promise::Deferred deferred = Napi::Promise::Deferred::New(env);
 
@@ -970,6 +1095,12 @@ void InitNonStreamingAsr(Napi::Env env, Napi::Object exports) {
 
   exports.Set(Napi::String::New(env, "offlineStreamSetOption"),
               Napi::Function::New(env, OfflineStreamSetOptionWrapper));
+
+  exports.Set(Napi::String::New(env, "offlineStreamGetOption"),
+              Napi::Function::New(env, OfflineStreamGetOptionWrapper));
+
+  exports.Set(Napi::String::New(env, "offlineStreamHasOption"),
+              Napi::Function::New(env, OfflineStreamHasOptionWrapper));
 
   exports.Set(Napi::String::New(env, "decodeOfflineStream"),
               Napi::Function::New(env, DecodeOfflineStreamWrapper));

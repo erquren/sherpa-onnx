@@ -8,9 +8,6 @@
 #include <stdlib.h>
 
 #include <utility>
-#if SHERPA_ONNX_ENABLE_WASM
-#include <emscripten.h>
-#endif
 #if __OHOS__
 #include "hilog/log.h"
 
@@ -37,14 +34,12 @@
 #elif defined(__OHOS__)
 #define SHERPA_ONNX_LOGE(...) OH_LOG_INFO(LOG_APP, ##__VA_ARGS__)
 #elif SHERPA_ONNX_ENABLE_WASM
-#define SHERPA_ONNX_LOGE(...)                                          \
-  do {                                                                 \
-    char _buf[4096];                                                   \
-    snprintf(_buf, sizeof(_buf), ##__VA_ARGS__);                       \
-    emscripten_log(EM_LOG_CONSOLE | EM_LOG_NO_PATHS | EM_LOG_ERROR,   \
-                   "%s:%s:%d %s",                                      \
-                   __FILE__, __func__, static_cast<int>(__LINE__),     \
-                   _buf);                                              \
+#define SHERPA_ONNX_LOGE(...)                        \
+  do {                                               \
+    fprintf(stdout, "%s:%s:%d ", __FILE__, __func__, \
+            static_cast<int>(__LINE__));             \
+    fprintf(stdout, ##__VA_ARGS__);                  \
+    fprintf(stdout, "\n");                           \
   } while (0)
 #else
 #define SHERPA_ONNX_LOGE(...)                        \
@@ -72,7 +67,7 @@
       SHERPA_ONNX_EXIT(-1);                                                \
     }                                                                      \
                                                                            \
-    dst = atoi(value.c_str());                                             \
+    dst = ToIntOrDefault(value, -1);                                       \
     if (dst < 0) {                                                         \
       SHERPA_ONNX_LOGE("Invalid value %d for '%s'", dst, src_key);         \
       SHERPA_ONNX_EXIT(-1);                                                \
@@ -85,11 +80,12 @@
     if (value.empty()) {                                                     \
       dst = default_value;                                                   \
     } else {                                                                 \
-      dst = atoi(value.c_str());                                             \
-      if (dst < 0) {                                                         \
-        SHERPA_ONNX_LOGE("Invalid value %d for '%s'", dst, src_key);         \
+      auto ivalue = ToIntOrDefault(value, -1);                               \
+      if (ivalue < 0) {                                                      \
+        SHERPA_ONNX_LOGE("Invalid value %d for '%s'", ivalue, src_key);      \
         SHERPA_ONNX_EXIT(-1);                                                \
       }                                                                      \
+      dst = ivalue;                                                          \
     }                                                                        \
   } while (0)
 

@@ -1,19 +1,21 @@
+include_guard(GLOBAL)
+
 # Copyright (c)  2020  Xiaomi Corporation (author: Fangjun Kuang)
 
 function(download_openfst)
   include(FetchContent)
 
-  set(openfst_URL  "https://github.com/csukuangfj/openfst/archive/refs/tags/v1.8.5-2026-04-11.tar.gz")
-  set(openfst_HASH "SHA256=57fbc4b950ae81b1a0e1e298af15652da968a6723a592b7874e9b4027a80a5b4")
+  set(openfst_URL  "https://github.com/csukuangfj/openfst/archive/refs/tags/v1.8.5-2026-11-21.tar.gz")
+  set(openfst_HASH "SHA256=9ea090fd9b17cf4edfbc47ab49f0645d1b70eb48cd21047c1897509c379a9ef1")
 
   # If you don't have access to the Internet,
   # please pre-download it
   set(possible_file_locations
-    $ENV{HOME}/Downloads/openfst-1.8.5-2026-04-11.tar.gz
-    ${CMAKE_SOURCE_DIR}/openfst-1.8.5-2026-04-11.tar.gz
-    ${CMAKE_BINARY_DIR}/openfst-1.8.5-2026-04-11.tar.gz
-    /tmp/openfst-1.8.5-2026-04-11.tar.gz
-    /star-fj/fangjun/download/github/openfst-1.8.5-2026-04-11.tar.gz
+    $ENV{HOME}/Downloads/openfst-1.8.5-2026-11-21.tar.gz
+    ${CMAKE_SOURCE_DIR}/openfst-1.8.5-2026-11-21.tar.gz
+    ${CMAKE_BINARY_DIR}/openfst-1.8.5-2026-11-21.tar.gz
+    /tmp/openfst-1.8.5-2026-11-21.tar.gz
+    /star-fj/fangjun/download/github/openfst-1.8.5-2026-11-21.tar.gz
   )
 
   foreach(f IN LISTS possible_file_locations)
@@ -34,8 +36,8 @@ function(download_openfst)
   set(HAVE_PDT OFF CACHE BOOL "" FORCE)
   set(HAVE_MPDT OFF CACHE BOOL "" FORCE)
   set(HAVE_LINEAR OFF CACHE BOOL "" FORCE)
-  set(HAVE_LOOKAHEAD OFF CACHE BOOL "" FORCE)
-  set(HAVE_NGRAM OFF CACHE BOOL "" FORCE)
+  set(HAVE_LOOKAHEAD ON CACHE BOOL "" FORCE)  # read olabel_lookahead fsts (vosk HCLr)
+  set(HAVE_NGRAM ON CACHE BOOL "" FORCE)  # read ngram fsts (vosk Gr)
   set(HAVE_PYTHON OFF CACHE BOOL "" FORCE)
   set(HAVE_SPECIAL OFF CACHE BOOL "" FORCE)
 
@@ -56,6 +58,13 @@ function(download_openfst)
 
   add_subdirectory(${openfst_SOURCE_DIR} ${openfst_BINARY_DIR} EXCLUDE_FROM_ALL)
 
+  if(TARGET fst AND MSVC)
+    # C4291: no matching operator delete for the placement operator new of
+    # the pool allocators. That is intentional in openfst (pool-managed
+    # memory), so silence it for its own target.
+    target_compile_options(fst PRIVATE /wd4291)
+  endif()
+
   if(_build_shared_libs_bak)
     set_target_properties(fst fstfar
       PROPERTIES
@@ -70,6 +79,13 @@ function(download_openfst)
 
   set_target_properties(fst PROPERTIES OUTPUT_NAME "sherpa-onnx-fst")
   set_target_properties(fstfar PROPERTIES OUTPUT_NAME "sherpa-onnx-fstfar")
+
+  if(NOT BUILD_SHARED_LIBS)
+    install(TARGETS
+      fst
+      fstfar
+    DESTINATION lib)
+  endif()
 endfunction()
 
 download_openfst()

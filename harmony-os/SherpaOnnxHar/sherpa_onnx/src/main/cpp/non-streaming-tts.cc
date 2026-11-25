@@ -5,7 +5,6 @@
 #include <algorithm>
 #include <atomic>
 #include <memory>
-#include <mutex>  // NOLINT
 #include <sstream>
 #include <string>
 #include <vector>
@@ -13,6 +12,7 @@
 #include "macros.h"  // NOLINT
 #include "napi.h"    // NOLINT
 #include "sherpa-onnx/c-api/c-api.h"
+#include "typed-array.h"  // NOLINT
 
 #define SHERPA_ONNX_ASSIGN_TTS_ATTR()                                  \
   do {                                                                 \
@@ -39,6 +39,7 @@
     SHERPA_ONNX_DELETE_C_STR(c.model.kitten.voices);            \
     SHERPA_ONNX_DELETE_C_STR(c.model.kitten.tokens);            \
     SHERPA_ONNX_DELETE_C_STR(c.model.kitten.data_dir);          \
+    SHERPA_ONNX_DELETE_C_STR(c.model.kitten.lexicon);           \
                                                                  \
     SHERPA_ONNX_DELETE_C_STR(c.model.zipvoice.tokens);          \
     SHERPA_ONNX_DELETE_C_STR(c.model.zipvoice.encoder);         \
@@ -76,13 +77,36 @@
     SHERPA_ONNX_DELETE_C_STR(c.rule_fars);                      \
   } while (0)
 
-#define SHERPA_ONNX_DELETE_GENERATION_C_STR(c)  \
-  do {                                          \
-    SHERPA_ONNX_DELETE_C_STR(c.reference_text); \
-    SHERPA_ONNX_DELETE_C_STR(c.extra);          \
-    if (c.reference_audio) {                    \
-      delete[] c.reference_audio;               \
-    }                                           \
+#define SHERPA_ONNX_DELETE_GENERATION_C_STR(c)                  \
+  do {                                                          \
+    SHERPA_ONNX_DELETE_C_STR(c.reference_text);                 \
+    SHERPA_ONNX_DELETE_C_STR(c.extra);                          \
+    if (c.reference_audio) {                                    \
+      delete[] c.reference_audio;                               \
+    }                                                           \
+    if (c.phoneme_codepoints) {                                 \
+      delete[] c.phoneme_codepoints;                            \
+    }                                                           \
+    if (c.phoneme_codepoints_lens) {                            \
+      delete[] c.phoneme_codepoints_lens;                       \
+    }                                                           \
+    if (c.tokens) {                                             \
+      /* c.tokens is a FLAT array of sum(tokens_lens) strings,   \
+         not one per sentence, so free every token. */           \
+      int32_t num_tokens = 0;                                   \
+      if (c.tokens_lens) {                                      \
+        for (int32_t i = 0; i != c.tokens_num_sentences; ++i) { \
+          num_tokens += c.tokens_lens[i];                       \
+        }                                                       \
+      }                                                         \
+      for (int32_t i = 0; i != num_tokens; ++i) {               \
+        SHERPA_ONNX_DELETE_C_STR(c.tokens[i]);                  \
+      }                                                         \
+      delete[] c.tokens;                                        \
+    }                                                           \
+    if (c.tokens_lens) {                                        \
+      delete[] c.tokens_lens;                                   \
+    }                                                           \
   } while (0)
 
 static std::string JsObjectToJson(Napi::Env env, const Napi::Object &obj) {
@@ -95,6 +119,70 @@ static SherpaOnnxGenerationConfig GetGenerationConfig(Napi::Object o) {
   SherpaOnnxGenerationConfig c;
   memset(&c, 0, sizeof(c));
 
+  Napi::Env env = o.Env();
+
+  // Validate before marshalling anything: phonemeCodepoints must be an array
+  // of arrays of numbers and tokens an array of arrays of strings. Anything
+  // else is a caller bug, so throw a JS exception and bail out.
+  struct {
+    const char *name;
+    const char *element_type;
+    bool numeric;
+  } nested_arrays[] = {
+      {"phonemeCodepoints", "number", true},
+      {"tokens", "string", false},
+  };
+  for (const auto &f : nested_arrays) {
+    if (!o.Has(f.name)) {
+      continue;
+    }
+    Napi::Value v = o.Get(f.name);
+    // An optional field that was declared but left unset arrives here as
+    // undefined/null. Treat that as "not provided" instead of a type error,
+    // matching how referenceAudio is handled below.
+    if (v.IsUndefined() || v.IsNull()) {
+      continue;
+    }
+    if (!v.IsArray()) {
+      Napi::TypeError::New(env, std::string(f.name) + " must be an array of arrays")
+          .ThrowAsJavaScriptException();
+      return c;
+    }
+    Napi::Array outer = v.As<Napi::Array>();
+    for (uint32_t i = 0; i < outer.Length(); ++i) {
+      Napi::Value e = outer.Get(i);
+      if (!e.IsArray()) {
+        Napi::TypeError::New(
+            env,
+            std::string(f.name) + "[" + std::to_string(i) + "] must be an array")
+            .ThrowAsJavaScriptException();
+        return c;
+      }
+      Napi::Array inner = e.As<Napi::Array>();
+      if (inner.Length() == 0) {
+        // The C API requires every sentence to have at least one entry.
+        Napi::TypeError::New(
+            env,
+            std::string(f.name) + "[" + std::to_string(i) +
+                "] must be a non-empty array")
+            .ThrowAsJavaScriptException();
+        return c;
+      }
+      for (uint32_t j = 0; j < inner.Length(); ++j) {
+        Napi::Value item = inner.Get(j);
+        bool ok = f.numeric ? item.IsNumber() : item.IsString();
+        if (!ok) {
+          Napi::TypeError::New(
+              env,
+              std::string(f.name) + "[" + std::to_string(i) + "][" +
+                  std::to_string(j) + "] must be a " + f.element_type)
+              .ThrowAsJavaScriptException();
+          return c;
+        }
+      }
+    }
+  }
+
   SHERPA_ONNX_ASSIGN_ATTR_FLOAT(silence_scale, silenceScale);
   SHERPA_ONNX_ASSIGN_ATTR_FLOAT(speed, speed);
   SHERPA_ONNX_ASSIGN_ATTR_INT32(sid, sid);
@@ -104,7 +192,7 @@ static SherpaOnnxGenerationConfig GetGenerationConfig(Napi::Object o) {
 
   if (o.Has("referenceAudio") && o.Get("referenceAudio").IsTypedArray()) {
     auto arr = o.Get("referenceAudio").As<Napi::Float32Array>();
-    int32_t n = arr.ElementLength();
+    int32_t n = GetFloat32ArrayElementLength(arr);
 
     if (n > 0) {
       float *buf = new float[n];
@@ -125,6 +213,66 @@ static SherpaOnnxGenerationConfig GetGenerationConfig(Napi::Object o) {
     c.extra = p;
   }
 
+  // phonemeCodepoints: JS number[][] -> one flat int32 array plus the
+  // per-sentence lengths, as expected by the C API.
+  if (o.Has("phonemeCodepoints") && o.Get("phonemeCodepoints").IsArray()) {
+    Napi::Array outer = o.Get("phonemeCodepoints").As<Napi::Array>();
+    uint32_t n = outer.Length();
+
+    if (n > 0) {
+      std::vector<int32_t> flat;
+      int32_t *lens = new int32_t[n];
+
+      for (uint32_t i = 0; i < n; ++i) {
+        Napi::Array inner = outer.Get(i).As<Napi::Array>();
+        uint32_t m = inner.Length();
+        lens[i] = static_cast<int32_t>(m);
+        for (uint32_t j = 0; j < m; ++j) {
+          flat.push_back(inner.Get(j).ToNumber().Int32Value());
+        }
+      }
+
+      int32_t *buf = new int32_t[flat.empty() ? 1 : flat.size()];
+      std::copy(flat.begin(), flat.end(), buf);
+
+      c.phoneme_codepoints = buf;
+      c.phoneme_codepoints_lens = lens;
+      c.phoneme_codepoints_num_sentences = static_cast<int32_t>(n);
+    }
+  }
+
+  // tokens: JS string[][] -> one flat char** array plus the per-sentence
+  // lengths, as expected by the C API.
+  if (o.Has("tokens") && o.Get("tokens").IsArray()) {
+    Napi::Array outer = o.Get("tokens").As<Napi::Array>();
+    uint32_t n = outer.Length();
+
+    if (n > 0) {
+      std::vector<const char *> flat;
+      int32_t *lens = new int32_t[n];
+
+      for (uint32_t i = 0; i < n; ++i) {
+        Napi::Array inner = outer.Get(i).As<Napi::Array>();
+        uint32_t m = inner.Length();
+        lens[i] = static_cast<int32_t>(m);
+        for (uint32_t j = 0; j < m; ++j) {
+          std::string s = inner.Get(j).ToString().Utf8Value();
+          char *q = new char[s.size() + 1];
+          std::copy(s.begin(), s.end(), q);
+          q[s.size()] = 0;
+          flat.push_back(q);
+        }
+      }
+
+      const char **buf = new const char *[flat.empty() ? 1 : flat.size()];
+      std::copy(flat.begin(), flat.end(), buf);
+
+      c.tokens = buf;
+      c.tokens_lens = lens;
+      c.tokens_num_sentences = static_cast<int32_t>(n);
+    }
+  }
+
   return c;
 }
 
@@ -141,6 +289,9 @@ static SherpaOnnxOfflineTtsVitsModelConfig GetOfflineTtsVitsModelConfig(
   SHERPA_ONNX_ASSIGN_ATTR_STR(model, model);
   SHERPA_ONNX_ASSIGN_ATTR_STR(lexicon, lexicon);
   SHERPA_ONNX_ASSIGN_ATTR_STR(tokens, tokens);
+  // data_dir is deprecated and ignored since v2.0.0 (espeak-ng is gone). Kept
+  // only so the C struct slot stays valid; the same applies to the matcha,
+  // kokoro, kitten and zipvoice model configs below.
   SHERPA_ONNX_ASSIGN_ATTR_STR(data_dir, dataDir);
   SHERPA_ONNX_ASSIGN_ATTR_FLOAT(noise_scale, noiseScale);
   SHERPA_ONNX_ASSIGN_ATTR_FLOAT(noise_scale_w, noiseScaleW);
@@ -206,6 +357,7 @@ static SherpaOnnxOfflineTtsKittenModelConfig GetOfflineTtsKittenModelConfig(
   SHERPA_ONNX_ASSIGN_ATTR_STR(tokens, tokens);
   SHERPA_ONNX_ASSIGN_ATTR_STR(data_dir, dataDir);
   SHERPA_ONNX_ASSIGN_ATTR_FLOAT(length_scale, lengthScale);
+  SHERPA_ONNX_ASSIGN_ATTR_STR(lexicon, lexicon);
 
   return c;
 }
@@ -306,14 +458,7 @@ static SherpaOnnxOfflineTtsModelConfig GetOfflineTtsModelConfig(
 
   SHERPA_ONNX_ASSIGN_ATTR_INT32(num_threads, numThreads);
 
-  if (o.Has("debug") &&
-      (o.Get("debug").IsNumber() || o.Get("debug").IsBoolean())) {
-    if (o.Get("debug").IsBoolean()) {
-      c.debug = o.Get("debug").As<Napi::Boolean>().Value();
-    } else {
-      c.debug = o.Get("debug").As<Napi::Number>().Int32Value();
-    }
-  }
+  SHERPA_ONNX_ASSIGN_ATTR_BOOL(debug, debug);
 
   SHERPA_ONNX_ASSIGN_ATTR_STR(provider, provider);
 
@@ -527,6 +672,35 @@ static Napi::Number OfflineTtsNumSpeakersWrapper(
   return Napi::Number::New(env, num_speakers);
 }
 
+static Napi::String OfflineTtsLangWrapper(const Napi::CallbackInfo &info) {
+  Napi::Env env = info.Env();
+
+  if (info.Length() != 1) {
+    std::ostringstream os;
+    os << "Expect only 1 argument. Given: " << info.Length();
+
+    Napi::TypeError::New(env, os.str()).ThrowAsJavaScriptException();
+
+    return {};
+  }
+
+  if (!info[0].IsExternal()) {
+    Napi::TypeError::New(env, "Argument 0 should be an offline tts pointer.")
+        .ThrowAsJavaScriptException();
+
+    return {};
+  }
+
+  const SherpaOnnxOfflineTts *tts =
+      info[0].As<Napi::External<SherpaOnnxOfflineTts>>().Data();
+
+  const char *s = SherpaOnnxOfflineTtsLang(tts);
+  std::string lang = s;
+  SherpaOnnxDestroyOfflineTtsLang(s);
+
+  return Napi::String::New(env, lang);
+}
+
 // synchronous version
 static Napi::Object OfflineTtsGenerateWithConfigWrapper(
     const Napi::CallbackInfo &info) {
@@ -576,6 +750,11 @@ static Napi::Object OfflineTtsGenerateWithConfigWrapper(
           : Napi::Object::New(env);
 
   SherpaOnnxGenerationConfig gen_config = GetGenerationConfig(genObj);
+  if (env.IsExceptionPending()) {
+    // GetGenerationConfig throws before allocating anything, so there is
+    // nothing to free here.
+    return {};
+  }
 
   const SherpaOnnxGeneratedAudio *audio =
       SherpaOnnxOfflineTtsGenerateWithConfig(tts, text.c_str(), &gen_config,
@@ -584,8 +763,13 @@ static Napi::Object OfflineTtsGenerateWithConfigWrapper(
   SHERPA_ONNX_DELETE_GENERATION_C_STR(gen_config);
 
   if (!audio) {
-    Napi::Error::New(env, "TTS generation failed").ThrowAsJavaScriptException();
-    return {};
+    // Generation failed. The C API already logged the reason (for instance
+    // phonemeCodepoints and tokens are mutually exclusive). Return empty
+    // audio instead of throwing, matching C++/C/Python/Rust/Go/Java.
+    Napi::Object result = Napi::Object::New(env);
+    result.Set("samples", Napi::Float32Array::New(env, 0));
+    result.Set("sampleRate", 0);
+    return result;
   }
 
   Napi::Object result = Napi::Object::New(env);
@@ -743,79 +927,232 @@ static Napi::Object OfflineTtsGenerateWrapper(const Napi::CallbackInfo &info) {
   }
 }
 
+// Cancellation (JS callback returning 0/false) is best-effort: the producer
+// checks the flag before synthesizing the next chunk and already-queued
+// chunks are suppressed before reaching JS, but audio synthesized before the
+// flag was observed is not rolled back from the final result.
 struct TtsCallbackData {
   std::vector<float> samples;
   float progress;
-  std::atomic<bool> processed = {false};
-  std::atomic<bool> cancelled = {false};
+  std::shared_ptr<std::atomic<bool>> cancelled;
+  // FIFO drain marker queued by the producer after the last real chunk; it is
+  // processed on the main thread with a valid env (unlike the TSFN finalizer,
+  // which may run during environment teardown where JS must not execute)
+  bool done_sentinel = false;
 };
 
-// Mutex to protect data_list_ access between background TTS thread and main
-// Node.js thread (TSFN callback). A static mutex is acceptable here because
-// the critical sections are very short (flag checks + push_back/erase).
-static std::mutex g_data_list_mutex;
+// Settlement state shared between the AsyncWorker (generation_done) and the
+// FIFO done-sentinel processed by InvokeJsCallback (callbacks_drained). Both
+// signals fire on the main thread with a valid env, so plain fields need no
+// synchronization and no JS runs from the TSFN finalizer (unsafe during
+// environment teardown). The promise settles only when the SECOND signal
+// arrives, guaranteeing every queued progress callback ran — and any error it
+// recorded is visible — before resolve/reject.
+struct TtsSettleState {
+  explicit TtsSettleState(Napi::Env env) : deferred(env) {}
+  Napi::Promise::Deferred deferred;
+  bool generation_done = false;
+  bool callbacks_drained = false;
+  bool settled = false;
+  bool use_external_buffer = false;
+  const SherpaOnnxGeneratedAudio *audio = nullptr;
+  std::string error;
+};
 
-// see
-// https://github.com/nodejs/node-addon-examples/blob/main/src/6-threadsafe-function/typed_threadsafe_function/node-addon-api/clock.cc
-static void InvokeJsCallback(Napi::Env env, Napi::Function callback,
-                             Napi::Reference<Napi::Value> *context,
-                             TtsCallbackData *data) {
-  if (env != nullptr) {
-    if (callback != nullptr) {
-      Napi::ArrayBuffer arrayBuffer =
-          Napi::ArrayBuffer::New(env, sizeof(float) * data->samples.size());
+static void SettleIfReady(Napi::Env env,
+                          const std::shared_ptr<TtsSettleState> &state) {
+  if (state->settled || !state->generation_done || !state->callbacks_drained) {
+    return;
+  }
 
-      Napi::Float32Array float32Array =
-          Napi::Float32Array::New(env, data->samples.size(), arrayBuffer, 0);
+  if (!state->error.empty()) {
+    if (state->audio) {
+      SherpaOnnxDestroyOfflineTtsGeneratedAudio(state->audio);
+      state->audio = nullptr;
+    }
+    state->deferred.Reject(Napi::Error::New(env, state->error).Value());
+    state->settled = true;
+    return;
+  }
 
-      std::copy(data->samples.begin(), data->samples.end(),
-                float32Array.Data());
+  if (state->audio == nullptr) {
+    state->deferred.Reject(
+        Napi::Error::New(env, "TTS generation produced no audio").Value());
+    state->settled = true;
+    return;
+  }
 
-      Napi::Object arg = Napi::Object::New(env);
-      arg.Set(Napi::String::New(env, "samples"), float32Array);
-      arg.Set(Napi::String::New(env, "progress"), data->progress);
+  Napi::Object ans = Napi::Object::New(env);
+  if (state->use_external_buffer) {
+    const SherpaOnnxGeneratedAudio *audio = state->audio;
+    Napi::ArrayBuffer arrayBuffer = Napi::ArrayBuffer::New(
+        env, const_cast<float *>(audio->samples), sizeof(float) * audio->n,
+        [](Napi::Env /*env*/, void * /*data*/,
+           const SherpaOnnxGeneratedAudio *hint) {
+          SherpaOnnxDestroyOfflineTtsGeneratedAudio(hint);
+        },
+        audio);
+    // The ArrayBuffer finalizer owns the audio from here on
+    state->audio = nullptr;
+    Napi::Float32Array float32Array =
+        Napi::Float32Array::New(env, audio->n, arrayBuffer, 0);
 
-      auto v = callback.Call(context->Value(), {arg});
+    ans.Set(Napi::String::New(env, "samples"), float32Array);
+    ans.Set(Napi::String::New(env, "sampleRate"), audio->sample_rate);
+  } else {
+    Napi::ArrayBuffer arrayBuffer =
+        Napi::ArrayBuffer::New(env, sizeof(float) * state->audio->n);
 
-      {
-        std::lock_guard<std::mutex> lock(g_data_list_mutex);
-        if ((v.IsBoolean() && !v.As<Napi::Boolean>().Value()) ||
-            (v.IsNumber() && v.As<Napi::Number>().Int32Value() == 0)) {
-          data->cancelled = true;
-        } else {
-          data->cancelled = false;
-        }
+    Napi::Float32Array float32Array =
+        Napi::Float32Array::New(env, state->audio->n, arrayBuffer, 0);
 
-        data->processed = true;
+    std::copy(state->audio->samples, state->audio->samples + state->audio->n,
+              float32Array.Data());
+
+    ans.Set(Napi::String::New(env, "samples"), float32Array);
+    ans.Set(Napi::String::New(env, "sampleRate"), state->audio->sample_rate);
+    SherpaOnnxDestroyOfflineTtsGeneratedAudio(state->audio);
+    state->audio = nullptr;
+  }
+
+  state->deferred.Resolve(ans);
+  state->settled = true;
+}
+
+// Settlement must never fail silently: if building the result or settling
+// throws, free the audio and reject so the promise cannot stay pending.
+static void SettleOrFail(Napi::Env env,
+                         const std::shared_ptr<TtsSettleState> &state) {
+  try {
+    SettleIfReady(env, state);
+  } catch (...) {
+    if (state->audio) {
+      SherpaOnnxDestroyOfflineTtsGeneratedAudio(state->audio);
+      state->audio = nullptr;
+    }
+    if (!state->settled) {
+      try {
+        state->deferred.Reject(
+            Napi::Error::New(env, "TTS settlement failed").Value());
+        state->settled = true;
+      } catch (...) {
       }
     }
   }
 }
 
-using TSFN = Napi::TypedThreadSafeFunction<Napi::Reference<Napi::Value>,
-                                           TtsCallbackData, InvokeJsCallback>;
+// Context owned by the TSFN: the JS receiver plus the settlement state, so
+// the FIFO done-sentinel processed in InvokeJsCallback can deliver the
+// second settle signal (the finalizer only destroys the context).
+struct TtsTsfnContext {
+  TtsTsfnContext(Napi::Env env, Napi::Value self)
+      : self(Napi::Persistent(self)),
+        state(std::make_shared<TtsSettleState>(env)) {}
+  Napi::Reference<Napi::Value> self;
+  std::shared_ptr<TtsSettleState> state;
+};
+
+// see
+// https://github.com/nodejs/node-addon-examples/blob/main/src/6-threadsafe-function/typed_threadsafe_function/node-addon-api/clock.cc
+//
+// Ownership contract: each TtsCallbackData is heap-allocated by the producer
+// (TTS worker thread) and freed exactly once here, on the main thread, after
+// the JS callback runs. N-API guarantees every queued item is delivered to
+// this function (with env == nullptr during teardown), so no other cleanup
+// path may touch these pointers.
+static void InvokeJsCallback(Napi::Env env, Napi::Function callback,
+                             TtsTsfnContext *context, TtsCallbackData *data) {
+  // RAII so the chunk is freed exactly once even if the JS callback throws
+  std::unique_ptr<TtsCallbackData> owned(data);
+
+  if (data->done_sentinel) {
+    // Queue is FIFO, so every real chunk was already delivered. During
+    // environment teardown (env == nullptr) only the sentinel is freed.
+    if (env != nullptr && context != nullptr) {
+      context->state->callbacks_drained = true;
+      SettleOrFail(env, context->state);
+    }
+    return;
+  }
+
+  if (env == nullptr || callback == nullptr ||
+      (data->cancelled && data->cancelled->load())) {
+    return;
+  }
+
+  Napi::ArrayBuffer arrayBuffer =
+      Napi::ArrayBuffer::New(env, sizeof(float) * data->samples.size());
+
+  Napi::Float32Array float32Array =
+      Napi::Float32Array::New(env, data->samples.size(), arrayBuffer, 0);
+
+  std::copy(data->samples.begin(), data->samples.end(), float32Array.Data());
+
+  Napi::Object arg = Napi::Object::New(env);
+  arg.Set(Napi::String::New(env, "samples"), float32Array);
+  arg.Set(Napi::String::New(env, "progress"), data->progress);
+
+  // A JS exception must not unwind through the N-API callback boundary nor be
+  // left pending on the env (either corrupts later native calls). A throwing
+  // callback cancels the generation and records the error; the settle path
+  // waits for the queue to drain, so the rejection is deterministic. Both
+  // node-addon-api exception modes are covered.
+  bool cancel_requested = false;
+  std::string error_message;
+  try {
+    auto v = callback.Call(context->self.Value(), {arg});
+
+    if (env.IsExceptionPending()) {
+      Napi::Error e = env.GetAndClearPendingException();
+      error_message = e.Message();
+      cancel_requested = true;
+    } else if ((v.IsBoolean() && !v.As<Napi::Boolean>().Value()) ||
+               (v.IsNumber() && v.As<Napi::Number>().Int32Value() == 0)) {
+      cancel_requested = true;
+    }
+  } catch (const Napi::Error &e) {
+    error_message = e.Message();
+    cancel_requested = true;
+  } catch (...) {
+    error_message = "onProgress callback threw";
+    cancel_requested = true;
+  }
+
+  if (cancel_requested && data->cancelled) {
+    data->cancelled->store(true);
+  }
+  if (!error_message.empty() && context->state->error.empty()) {
+    context->state->error = "onProgress callback threw: " + error_message;
+  }
+}
+
+using TSFN = Napi::TypedThreadSafeFunction<TtsTsfnContext, TtsCallbackData,
+                                           InvokeJsCallback>;
+
+// Chunks, not bytes: each entry is one progress callback's samples. The
+// producer runs on a worker thread, so a full queue blocks synthesis (never
+// the event loop) — backpressure instead of unbounded sample copies. 16
+// chunks of ~1s audio is comfortably above any real consumer lag.
+constexpr size_t kMaxPendingTtsChunks = 16;
 
 class TtsGenerateWorker : public Napi::AsyncWorker {
  public:
   TtsGenerateWorker(const Napi::Env &env, TSFN tsfn,
+                    std::shared_ptr<TtsSettleState> state,
                     const SherpaOnnxOfflineTts *tts, const std::string &text,
                     float speed, int32_t sid, bool use_external_buffer)
       : tsfn_(tsfn),
         Napi::AsyncWorker{env, "TtsGenerateWorker"},
-        deferred_(env),
+        state_(std::move(state)),
         tts_(tts),
         text_(text),
         speed_(speed),
         sid_(sid),
         use_external_buffer_(use_external_buffer) {}
 
-  Napi::Promise Promise() { return deferred_.Promise(); }
+  Napi::Promise Promise() { return state_->deferred.Promise(); }
 
-  ~TtsGenerateWorker() {
-    for (auto d : data_list_) {
-      delete d;
-    }
-  }
+  ~TtsGenerateWorker() = default;
 
  protected:
   void Execute() override {
@@ -823,37 +1160,26 @@ class TtsGenerateWorker : public Napi::AsyncWorker {
                        void *arg) -> int32_t {
       TtsGenerateWorker *_this = reinterpret_cast<TtsGenerateWorker *>(arg);
 
+      if (_this->cancelled_->load()) {
+#if __OHOS__
+        OH_LOG_INFO(LOG_APP, "TtsGenerate is cancelled");
+#endif
+        return 0;
+      }
+
       auto data = new TtsCallbackData;
       data->samples = std::vector<float>{samples, samples + n};
       data->progress = progress;
+      data->cancelled = _this->cancelled_;
 
-      {
-        std::lock_guard<std::mutex> lock(g_data_list_mutex);
-
-        for (auto it = _this->data_list_.begin();
-             it != _this->data_list_.end();) {
-          if ((*it)->processed) {
-            delete *it;
-            it = _this->data_list_.erase(it);
-          } else {
-            ++it;
-          }
+      const auto status = _this->tsfn_.BlockingCall(data);
+      if (status != napi_ok) {
+        delete data;
+        if (status == napi_closing) {
+          _this->tsfn_closing_ = true;
         }
-
-        for (auto d : _this->data_list_) {
-          if (d->cancelled) {
-#if __OHOS__
-            OH_LOG_INFO(LOG_APP, "TtsGenerate is cancelled");
-#endif
-            delete data;
-            return 0;
-          }
-        }
-
-        _this->data_list_.push_back(data);
+        return 0;
       }
-
-      _this->tsfn_.NonBlockingCall(data);
 
       return 1;
     };
@@ -864,47 +1190,42 @@ class TtsGenerateWorker : public Napi::AsyncWorker {
     audio_ = SherpaOnnxOfflineTtsGenerateWithConfig(
         tts_, text_.c_str(), &gen_config, callback, this);
 
-    tsfn_.Release();
+    if (!tsfn_closing_) {
+      auto *done = new TtsCallbackData;
+      done->done_sentinel = true;
+      const auto status = tsfn_.BlockingCall(done);
+      if (status != napi_ok) {
+        delete done;
+        if (status == napi_closing) {
+          tsfn_closing_ = true;
+        } else {
+          sentinel_failed_ = true;
+        }
+      }
+    }
+    if (!tsfn_closing_) {
+      tsfn_.Release();
+    }
   }
 
   void OnOK() override {
-    Napi::Env env = deferred_.Env();
-    Napi::Object ans = Napi::Object::New(env);
-    if (use_external_buffer_) {
-      Napi::ArrayBuffer arrayBuffer = Napi::ArrayBuffer::New(
-          env, const_cast<float *>(audio_->samples), sizeof(float) * audio_->n,
-          [](Napi::Env /*env*/, void * /*data*/,
-             const SherpaOnnxGeneratedAudio *hint) {
-            SherpaOnnxDestroyOfflineTtsGeneratedAudio(hint);
-          },
-          audio_);
-      Napi::Float32Array float32Array =
-          Napi::Float32Array::New(env, audio_->n, arrayBuffer, 0);
-
-      ans.Set(Napi::String::New(env, "samples"), float32Array);
-      ans.Set(Napi::String::New(env, "sampleRate"), audio_->sample_rate);
-    } else {
-      // don't use external buffer
-      Napi::ArrayBuffer arrayBuffer =
-          Napi::ArrayBuffer::New(env, sizeof(float) * audio_->n);
-
-      Napi::Float32Array float32Array =
-          Napi::Float32Array::New(env, audio_->n, arrayBuffer, 0);
-
-      std::copy(audio_->samples, audio_->samples + audio_->n,
-                float32Array.Data());
-
-      ans.Set(Napi::String::New(env, "samples"), float32Array);
-      ans.Set(Napi::String::New(env, "sampleRate"), audio_->sample_rate);
-      SherpaOnnxDestroyOfflineTtsGeneratedAudio(audio_);
+    state_->generation_done = true;
+    state_->audio = audio_;
+    state_->use_external_buffer = use_external_buffer_;
+    if (sentinel_failed_ || tsfn_closing_) {
+      // No drain signal will ever arrive; fail the generation instead of
+      // leaving the promise pending forever
+      if (state_->error.empty()) {
+        state_->error = "TTS progress queue failed";
+      }
+      state_->callbacks_drained = true;
     }
-
-    deferred_.Resolve(ans);
+    SettleOrFail(Env(), state_);
   }
 
  private:
   TSFN tsfn_;
-  Napi::Promise::Deferred deferred_;
+  std::shared_ptr<TtsSettleState> state_;
   const SherpaOnnxOfflineTts *tts_;
   std::string text_;
   float speed_;
@@ -913,7 +1234,15 @@ class TtsGenerateWorker : public Napi::AsyncWorker {
 
   const SherpaOnnxGeneratedAudio *audio_;
 
-  std::vector<TtsCallbackData *> data_list_;
+  std::shared_ptr<std::atomic<bool>> cancelled_ =
+      std::make_shared<std::atomic<bool>>(false);
+  // Worker-thread only: set when BlockingCall observes napi_closing, after
+  // which the TSFN must not be touched again (not even Release)
+  bool tsfn_closing_ = false;
+  // Worker-thread write in Execute, main-thread read in OnOK (sequenced by
+  // AsyncWorker): the done-sentinel could not be queued, so OnOK must not
+  // wait for a drain signal that will never arrive
+  bool sentinel_failed_ = false;
 };
 
 static Napi::Object OfflineTtsGenerateAsyncWrapper(
@@ -1007,20 +1336,20 @@ static Napi::Object OfflineTtsGenerateAsyncWrapper(
     cb = obj.Get("callback").As<Napi::Function>();
   }
 
-  auto context =
-      new Napi::Reference<Napi::Value>(Napi::Persistent(info.This()));
+  auto context = new TtsTsfnContext(env, info.This());
 
   TSFN tsfn = TSFN::New(
       env,
       cb,                 // JavaScript function called asynchronously
       "TtsGenerateFunc",  // Name
-      0,                  // Unlimited queue
+      kMaxPendingTtsChunks,
       1,                  // Only one thread will use this initially
       context,
-      [](Napi::Env, void *, Napi::Reference<Napi::Value> *ctx) { delete ctx; });
+      [](Napi::Env, void *, TtsTsfnContext *ctx) { delete ctx; });
 
   TtsGenerateWorker *worker = new TtsGenerateWorker(
-      env, tsfn, tts, text, speed, sid, enable_external_buffer);
+      env, tsfn, context->state, tts, text, speed, sid,
+      enable_external_buffer);
   worker->Queue();
   return worker->Promise();
 }
@@ -1029,23 +1358,23 @@ static Napi::Object OfflineTtsGenerateAsyncWrapper(
 class TtsGenerateWithConfigWorker : public Napi::AsyncWorker {
  public:
   TtsGenerateWithConfigWorker(const Napi::Env &env, TSFN tsfn,
+                              std::shared_ptr<TtsSettleState> state,
                               const SherpaOnnxOfflineTts *tts,
                               const std::string &text,
                               const SherpaOnnxGenerationConfig &gen_config,
                               bool use_external_buffer)
       : tsfn_(tsfn),
         Napi::AsyncWorker(env, "TtsGenerateWithConfigWorker"),
-        deferred_(env),
+        state_(std::move(state)),
         tts_(tts),
         text_(text),
         gen_config_(gen_config),
         use_external_buffer_(use_external_buffer) {}
 
-  Napi::Promise Promise() { return deferred_.Promise(); }
+  Napi::Promise Promise() { return state_->deferred.Promise(); }
 
   ~TtsGenerateWithConfigWorker() {
     SHERPA_ONNX_DELETE_GENERATION_C_STR(gen_config_);
-    for (auto d : data_list_) delete d;
   }
 
  protected:
@@ -1055,36 +1384,23 @@ class TtsGenerateWithConfigWorker : public Napi::AsyncWorker {
       TtsGenerateWithConfigWorker *_this =
           reinterpret_cast<TtsGenerateWithConfigWorker *>(arg);
 
+      if (_this->cancelled_->load()) {
+        return 0;
+      }
+
       auto data = new TtsCallbackData;
       data->samples = std::vector<float>{samples, samples + n};
       data->progress = progress;
+      data->cancelled = _this->cancelled_;
 
-      {
-        std::lock_guard<std::mutex> lock(g_data_list_mutex);
-
-        // Clean up processed chunks
-        for (auto it = _this->data_list_.begin();
-             it != _this->data_list_.end();) {
-          if ((*it)->processed) {
-            delete *it;
-            it = _this->data_list_.erase(it);
-          } else {
-            ++it;
-          }
+      const auto status = _this->tsfn_.BlockingCall(data);
+      if (status != napi_ok) {
+        delete data;
+        if (status == napi_closing) {
+          _this->tsfn_closing_ = true;
         }
-
-        // Cancel check
-        for (auto d : _this->data_list_) {
-          if (d->cancelled) {
-            delete data;
-            return 0;
-          }
-        }
-
-        _this->data_list_.push_back(data);
+        return 0;
       }
-
-      _this->tsfn_.NonBlockingCall(data);
 
       return 1;
     };
@@ -1092,46 +1408,51 @@ class TtsGenerateWithConfigWorker : public Napi::AsyncWorker {
     audio_ = SherpaOnnxOfflineTtsGenerateWithConfig(
         tts_, text_.c_str(), &gen_config_, callback, this);
 
-    tsfn_.Release();
+    if (!tsfn_closing_) {
+      auto *done = new TtsCallbackData;
+      done->done_sentinel = true;
+      const auto status = tsfn_.BlockingCall(done);
+      if (status != napi_ok) {
+        delete done;
+        if (status == napi_closing) {
+          tsfn_closing_ = true;
+        } else {
+          sentinel_failed_ = true;
+        }
+      }
+    }
+    if (!tsfn_closing_) {
+      tsfn_.Release();
+    }
   }
 
   void OnOK() override {
-    Napi::Env env = deferred_.Env();
-    Napi::Object ans = Napi::Object::New(env);
-    if (use_external_buffer_) {
-      Napi::ArrayBuffer arrayBuffer = Napi::ArrayBuffer::New(
-          env, const_cast<float *>(audio_->samples), sizeof(float) * audio_->n,
-          [](Napi::Env, void *, const SherpaOnnxGeneratedAudio *hint) {
-            SherpaOnnxDestroyOfflineTtsGeneratedAudio(hint);
-          },
-          audio_);
-      Napi::Float32Array float32Array =
-          Napi::Float32Array::New(env, audio_->n, arrayBuffer, 0);
-      ans.Set("samples", float32Array);
-      ans.Set("sampleRate", audio_->sample_rate);
-    } else {
-      Napi::ArrayBuffer arrayBuffer =
-          Napi::ArrayBuffer::New(env, sizeof(float) * audio_->n);
-      Napi::Float32Array float32Array =
-          Napi::Float32Array::New(env, audio_->n, arrayBuffer, 0);
-      std::copy(audio_->samples, audio_->samples + audio_->n,
-                float32Array.Data());
-      ans.Set("samples", float32Array);
-      ans.Set("sampleRate", audio_->sample_rate);
-      SherpaOnnxDestroyOfflineTtsGeneratedAudio(audio_);
+    state_->generation_done = true;
+    state_->audio = audio_;
+    state_->use_external_buffer = use_external_buffer_;
+    if (sentinel_failed_ || tsfn_closing_) {
+      // No drain signal will ever arrive; fail the generation instead of
+      // leaving the promise pending forever
+      if (state_->error.empty()) {
+        state_->error = "TTS progress queue failed";
+      }
+      state_->callbacks_drained = true;
     }
-    deferred_.Resolve(ans);
+    SettleOrFail(Env(), state_);
   }
 
  private:
   TSFN tsfn_;
-  Napi::Promise::Deferred deferred_;
+  std::shared_ptr<TtsSettleState> state_;
   const SherpaOnnxOfflineTts *tts_;
   std::string text_;
   SherpaOnnxGenerationConfig gen_config_;
   bool use_external_buffer_;
   const SherpaOnnxGeneratedAudio *audio_;
-  std::vector<TtsCallbackData *> data_list_;
+  std::shared_ptr<std::atomic<bool>> cancelled_ =
+      std::make_shared<std::atomic<bool>>(false);
+  bool tsfn_closing_ = false;
+  bool sentinel_failed_ = false;
 };
 
 static Napi::Object OfflineTtsGenerateAsyncWithConfigWrapper(
@@ -1168,21 +1489,25 @@ static Napi::Object OfflineTtsGenerateAsyncWithConfigWrapper(
     cb = obj.Get("callback").As<Napi::Function>();
   }
 
-  auto context =
-      new Napi::Reference<Napi::Value>(Napi::Persistent(info.This()));
-  TSFN tsfn = TSFN::New(
-      env, cb, "TtsGenerateWithConfig", 0, 1, context,
-      [](Napi::Env, void *, Napi::Reference<Napi::Value> *ctx) { delete ctx; });
-
+  // Parse and validate the generation config before creating any resources.
   SherpaOnnxGenerationConfig gen_config;
   memset(&gen_config, 0, sizeof(gen_config));
   if (obj.Has("generationConfig") && obj.Get("generationConfig").IsObject()) {
     gen_config =
         GetGenerationConfig(obj.Get("generationConfig").As<Napi::Object>());
+    if (env.IsExceptionPending()) {
+      return {};
+    }
   }
 
+  auto context = new TtsTsfnContext(env, info.This());
+  TSFN tsfn = TSFN::New(
+      env, cb, "TtsGenerateWithConfig", kMaxPendingTtsChunks, 1, context,
+      [](Napi::Env, void *, TtsTsfnContext *ctx) { delete ctx; });
+
   TtsGenerateWithConfigWorker *worker = new TtsGenerateWithConfigWorker(
-      env, tsfn, tts, text, gen_config, enable_external_buffer);
+      env, tsfn, context->state, tts, text, gen_config,
+      enable_external_buffer);
   worker->Queue();
   return worker->Promise();
 }
@@ -1199,6 +1524,9 @@ void InitNonStreamingTts(Napi::Env env, Napi::Object exports) {
 
   exports.Set(Napi::String::New(env, "getOfflineTtsNumSpeakers"),
               Napi::Function::New(env, OfflineTtsNumSpeakersWrapper));
+
+  exports.Set(Napi::String::New(env, "getOfflineTtsLang"),
+              Napi::Function::New(env, OfflineTtsLangWrapper));
 
   exports.Set(Napi::String::New(env, "offlineTtsGenerate"),
               Napi::Function::New(env, OfflineTtsGenerateWrapper));

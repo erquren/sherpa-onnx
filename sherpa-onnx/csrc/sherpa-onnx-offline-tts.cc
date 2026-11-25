@@ -29,10 +29,12 @@ Usage examples:
 wget https://github.com/k2-fsa/sherpa-onnx/releases/download/tts-models/vits-piper-en_US-amy-low.tar.bz2
 tar xf vits-piper-en_US-amy-low.tar.bz2
 
+wget https://github.com/k2-fsa/sherpa-onnx/releases/download/tts-models/lexicon-en-us.txt
+
 ./bin/sherpa-onnx-offline-tts \
  --vits-model=./vits-piper-en_US-amy-low/en_US-amy-low.onnx \
  --vits-tokens=./vits-piper-en_US-amy-low/tokens.txt \
- --vits-data-dir=./vits-piper-en_US-amy-low/espeak-ng-data \
+ --vits-lexicon=./lexicon-en-us.txt \
  --output-filename=./generated.wav \
   "Today as always, men fall into two groups: slaves and free men. Whoever does not have two-thirds of his day for himself, is a slave, whatever he may be: a statesman, a businessman, an official, or a scholar."
 
@@ -76,12 +78,12 @@ ZipVoice TTS:
 wget https://github.com/k2-fsa/sherpa-onnx/releases/download/tts-models/sherpa-onnx-zipvoice-distill-int8-zh-en-emilia.tar.bz2
 tar xf sherpa-onnx-zipvoice-distill-int8-zh-en-emilia.tar.bz2
 wget https://github.com/k2-fsa/sherpa-onnx/releases/download/vocoder-models/vocos_24khz.onnx
+wget https://github.com/k2-fsa/sherpa-onnx/releases/download/tts-models/lexicon-en-us.txt
 
 ./bin/sherpa-onnx-offline-tts \
  --zipvoice-encoder=./sherpa-onnx-zipvoice-distill-int8-zh-en-emilia/encoder.int8.onnx \
  --zipvoice-decoder=./sherpa-onnx-zipvoice-distill-int8-zh-en-emilia/decoder.int8.onnx \
- --zipvoice-data-dir=./sherpa-onnx-zipvoice-distill-int8-zh-en-emilia/espeak-ng-data \
- --zipvoice-lexicon=./sherpa-onnx-zipvoice-distill-int8-zh-en-emilia/lexicon.txt \
+ --zipvoice-lexicon=./sherpa-onnx-zipvoice-distill-int8-zh-en-emilia/lexicon.txt,./lexicon-en-us.txt \
  --zipvoice-tokens=./sherpa-onnx-zipvoice-distill-int8-zh-en-emilia/tokens.txt \
  --zipvoice-vocoder=./vocos_24khz.onnx \
  --reference-audio=./sherpa-onnx-zipvoice-distill-int8-zh-en-emilia/test_wavs/leijun-1.wav \
@@ -103,6 +105,7 @@ or details.
   sherpa_onnx::ParseOptions po(kUsageMessage);
   std::string output_filename = "./generated.wav";
   int32_t sid = 0;
+  int32_t emotion_id = -1;
 
   std::string reference_audio;
   po.Register(
@@ -135,6 +138,10 @@ or details.
               "Speaker ID. Used only for multi-speaker models, e.g., models "
               "trained using the VCTK dataset. Not used for single-speaker "
               "models, e.g., models trained using the LJSpeech dataset");
+
+  po.Register("emotion-id", &emotion_id,
+              "Emotion ID. Used only for models that support emotion "
+              "selection. Ignored otherwise.");
 
   po.Register("speed", &gen_config.speed,
               "Speech speed. Larger=faster. Used by Supertonic, VITS, etc. "
@@ -179,6 +186,11 @@ or details.
                          !config.model.zipvoice.decoder.empty();
 
   gen_config.sid = sid;
+  gen_config.silence_scale = config.silence_scale;
+
+  if (emotion_id >= 0) {
+    gen_config.extra["emotion_id"] = std::to_string(emotion_id);
+  }
 
   if (is_supertonic_tts && !lang.empty()) {
     gen_config.extra["lang"] = lang;

@@ -1,9 +1,10 @@
+include_guard(GLOBAL)
+
 function(download_kaldi_native_fbank)
   include(FetchContent)
 
-  set(kaldi_native_fbank_URL   "https://github.com/csukuangfj/kaldi-native-fbank/archive/refs/tags/v1.22.3.tar.gz")
-  set(kaldi_native_fbank_URL2  "https://hf-mirror.com/csukuangfj/sherpa-ncnn-cmake-deps/resolve/main/kaldi-native-fbank-1.22.3.tar.gz")
-  set(kaldi_native_fbank_HASH "SHA256=9176cc66fc7ce1edf85cf355b06e320c57db6297df74277f575183468893cf61")
+  set(kaldi_native_fbank_URL   "https://github.com/csukuangfj/kaldi-native-fbank/archive/refs/tags/v1.23.3.tar.gz")
+  set(kaldi_native_fbank_HASH "SHA256=1f14b426da8701b6e14acf6c72e7517f42710d7239dc2868e6610b8fc46ae4b0")
 
   set(KALDI_NATIVE_FBANK_BUILD_TESTS OFF CACHE BOOL "" FORCE)
   set(KALDI_NATIVE_FBANK_BUILD_PYTHON OFF CACHE BOOL "" FORCE)
@@ -12,11 +13,11 @@ function(download_kaldi_native_fbank)
   # If you don't have access to the Internet,
   # please pre-download kaldi-native-fbank
   set(possible_file_locations
-    $ENV{HOME}/Downloads/kaldi-native-fbank-1.22.3.tar.gz
-    ${CMAKE_SOURCE_DIR}/kaldi-native-fbank-1.22.3.tar.gz
-    ${CMAKE_BINARY_DIR}/kaldi-native-fbank-1.22.3.tar.gz
-    /tmp/kaldi-native-fbank-1.22.3.tar.gz
-    /star-fj/fangjun/download/github/kaldi-native-fbank-1.22.3.tar.gz
+    $ENV{HOME}/Downloads/kaldi-native-fbank-1.23.3.tar.gz
+    ${CMAKE_SOURCE_DIR}/kaldi-native-fbank-1.23.3.tar.gz
+    ${CMAKE_BINARY_DIR}/kaldi-native-fbank-1.23.3.tar.gz
+    /tmp/kaldi-native-fbank-1.23.3.tar.gz
+    /star-fj/fangjun/download/github/kaldi-native-fbank-1.23.3.tar.gz
   )
 
   foreach(f IN LISTS possible_file_locations)
@@ -24,7 +25,6 @@ function(download_kaldi_native_fbank)
       set(kaldi_native_fbank_URL  "${f}")
       file(TO_CMAKE_PATH "${kaldi_native_fbank_URL}" kaldi_native_fbank_URL)
       message(STATUS "Found local downloaded kaldi-native-fbank: ${kaldi_native_fbank_URL}")
-      set(kaldi_native_fbank_URL2 )
       break()
     endif()
   endforeach()
@@ -32,7 +32,6 @@ function(download_kaldi_native_fbank)
   FetchContent_Declare(kaldi_native_fbank
     URL
       ${kaldi_native_fbank_URL}
-      ${kaldi_native_fbank_URL2}
     URL_HASH          ${kaldi_native_fbank_HASH}
   )
 

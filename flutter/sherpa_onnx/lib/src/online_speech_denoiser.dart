@@ -5,38 +5,10 @@ import 'dart:typed_data';
 import 'package:ffi/ffi.dart';
 
 import './offline_speech_denoiser.dart';
+import './online_speech_denoiser_config.dart';
 import './sherpa_onnx_bindings.dart';
 
-/// Streaming speech denoising.
-///
-/// Call [run] on consecutive chunks, then [flush] after the final chunk to
-/// drain any buffered state.
-class OnlineSpeechDenoiserConfig {
-  const OnlineSpeechDenoiserConfig({
-    this.model = const OfflineSpeechDenoiserModelConfig(),
-  });
-
-  factory OnlineSpeechDenoiserConfig.fromJson(Map<String, dynamic> json) {
-    return OnlineSpeechDenoiserConfig(
-      model: json['model'] != null
-          ? OfflineSpeechDenoiserModelConfig.fromJson(
-              json['model'] as Map<String, dynamic>,
-            )
-          : const OfflineSpeechDenoiserModelConfig(),
-    );
-  }
-
-  @override
-  String toString() {
-    return 'OnlineSpeechDenoiserConfig(model: $model)';
-  }
-
-  Map<String, dynamic> toJson() => {
-        'model': model.toJson(),
-      };
-
-  final OfflineSpeechDenoiserModelConfig model;
-}
+export './online_speech_denoiser_config.dart';
 
 /// Streaming speech denoiser.
 class OnlineSpeechDenoiser {
@@ -53,6 +25,12 @@ class OnlineSpeechDenoiser {
     final c = calloc<SherpaOnnxOnlineSpeechDenoiserConfig>();
     c.ref.model.gtcrn.model = config.model.gtcrn.model.toNativeUtf8();
     c.ref.model.dpdfnet.model = config.model.dpdfnet.model.toNativeUtf8();
+    c.ref.model.voxlock.enrollModel =
+        config.model.voxlock.enrollModel.toNativeUtf8();
+    c.ref.model.voxlock.chunkModel =
+        config.model.voxlock.chunkModel.toNativeUtf8();
+    c.ref.model.voxlock.voiceSample =
+        config.model.voxlock.voiceSample.toNativeUtf8();
     c.ref.model.numThreads = config.model.numThreads;
     c.ref.model.debug = config.model.debug ? 1 : 0;
     c.ref.model.provider = config.model.provider.toNativeUtf8();
@@ -64,6 +42,9 @@ class OnlineSpeechDenoiser {
     calloc.free(c.ref.model.provider);
     calloc.free(c.ref.model.gtcrn.model);
     calloc.free(c.ref.model.dpdfnet.model);
+    calloc.free(c.ref.model.voxlock.enrollModel);
+    calloc.free(c.ref.model.voxlock.chunkModel);
+    calloc.free(c.ref.model.voxlock.voiceSample);
     calloc.free(c);
 
     if (ptr == nullptr) {

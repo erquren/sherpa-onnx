@@ -11,6 +11,7 @@
 #include <vector>
 
 #include "sherpa-onnx/csrc/macros.h"
+#include "sherpa-onnx/csrc/math.h"
 #include "sherpa-onnx/csrc/online-stream.h"
 #include "sherpa-onnx/csrc/onnx-utils.h"
 
@@ -40,23 +41,23 @@ static void DecodeOne(const float *encoder_out, int32_t num_rows,
 
   auto &r = s->GetResult();
 
-  Ort::Value decoder_out{nullptr};
-
   auto decoder_input = BuildDecoderInput(
       r.tokens.empty() ? blank_id : r.tokens.back(), model->Allocator());
 
+  Ort::Value &last_decoder_out = s->GetNeMoDecoderOut();
   std::vector<Ort::Value> &last_decoder_states = s->GetNeMoDecoderStates();
 
-  std::vector<Ort::Value> tmp_decoder_states;
-  tmp_decoder_states.reserve(last_decoder_states.size());
-  for (auto &v : last_decoder_states) {
-    tmp_decoder_states.push_back(View(&v));
-  }
-
   // decoder_output_pair.second returns the next decoder state
-  std::pair<Ort::Value, std::vector<Ort::Value>> decoder_output_pair =
-      model->RunDecoder(std::move(decoder_input),
-                        std::move(tmp_decoder_states));
+  std::pair<Ort::Value, std::vector<Ort::Value>> decoder_output_pair{
+      Ort::Value{nullptr}, std::vector<Ort::Value>{}};
+
+  if (!last_decoder_out) {
+    decoder_output_pair = model->RunDecoder(std::move(decoder_input),
+                                            std::move(last_decoder_states));
+  } else {
+    decoder_output_pair.first = std::move(last_decoder_out);
+    decoder_output_pair.second = std::move(last_decoder_states);
+  }
 
   std::array<int64_t, 3> encoder_shape{1, num_cols, 1};
 
@@ -80,10 +81,15 @@ static void DecodeOne(const float *encoder_out, int32_t num_rows,
 
       int32_t y = MaxElementIndex(p_logit, vocab_size);
 
+      // Apply LogSoftmax and get log probability for selected token
+      LogSoftmax(p_logit, vocab_size);
+      float log_prob = p_logit[y];
+
       if (y != blank_id) {
         emitted = true;
         r.tokens.push_back(y);
         r.timestamps.push_back(t + r.frame_offset);
+        r.ys_probs.push_back(log_prob);
         r.num_trailing_blanks = 0;
 
         decoder_input = BuildDecoderInput(y, model->Allocator());
@@ -98,9 +104,8 @@ static void DecodeOne(const float *encoder_out, int32_t num_rows,
     }
   }
 
-  if (emitted) {
-    s->SetNeMoDecoderStates(std::move(decoder_output_pair.second));
-  }
+  s->SetNeMoDecoderOut(std::move(decoder_output_pair.first));
+  s->SetNeMoDecoderStates(std::move(decoder_output_pair.second));
 
   r.frame_offset += num_rows;
 }

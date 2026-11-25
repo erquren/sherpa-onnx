@@ -13,18 +13,17 @@ if(NOT BUILD_SHARED_LIBS)
   message(FATAL_ERROR "This file is for building shared libraries. BUILD_SHARED_LIBS: ${BUILD_SHARED_LIBS}")
 endif()
 
-set(onnxruntime_URL  "https://github.com/csukuangfj/onnxruntime-libs/releases/download/v1.24.4/onnxruntime-osx-universal2-1.24.4.zip")
-set(onnxruntime_URL2 "https://hf-mirror.com/csukuangfj/onnxruntime-libs/resolve/main/1.24.4/onnxruntime-osx-universal2-1.24.4.zip")
-set(onnxruntime_HASH "SHA256=b3f67f521b6cc8d4a6d8f8fa9f33fbc99515559a39a99c1d4210c8f520f9af91")
+set(onnxruntime_URL  "https://github.com/csukuangfj/onnxruntime-libs/releases/download/v1.28.2/onnxruntime-osx-universal2-1.28.2.zip")
+set(onnxruntime_HASH "SHA256=b5033fb68b907fb31b80f9735f4d97270de5a1958f3234f5ffd09ee6ae0d0191")
 
 # If you don't have access to the Internet,
 # please download onnxruntime to one of the following locations.
 # You can add more if you want.
 set(possible_file_locations
-  $ENV{HOME}/Downloads/onnxruntime-osx-universal2-1.24.4.zip
-  ${CMAKE_SOURCE_DIR}/onnxruntime-osx-universal2-1.24.4.zip
-  ${CMAKE_BINARY_DIR}/onnxruntime-osx-universal2-1.24.4.zip
-  /tmp/onnxruntime-osx-universal2-1.24.4.zip
+  $ENV{HOME}/Downloads/onnxruntime-osx-universal2-1.28.2.zip
+  ${CMAKE_SOURCE_DIR}/onnxruntime-osx-universal2-1.28.2.zip
+  ${CMAKE_BINARY_DIR}/onnxruntime-osx-universal2-1.28.2.zip
+  /tmp/onnxruntime-osx-universal2-1.28.2.zip
 )
 
 foreach(f IN LISTS possible_file_locations)
@@ -32,7 +31,6 @@ foreach(f IN LISTS possible_file_locations)
     set(onnxruntime_URL  "${f}")
     file(TO_CMAKE_PATH "${onnxruntime_URL}" onnxruntime_URL)
     message(STATUS "Found local downloaded onnxruntime: ${onnxruntime_URL}")
-    set(onnxruntime_URL2)
     break()
   endif()
 endforeach()
@@ -40,7 +38,6 @@ endforeach()
 FetchContent_Declare(onnxruntime
   URL
     ${onnxruntime_URL}
-    ${onnxruntime_URL2}
   URL_HASH          ${onnxruntime_HASH}
 )
 

@@ -12,6 +12,13 @@ if(POLICY CMP0169)
   set(CMAKE_POLICY_DEFAULT_CMP0169 OLD)
 endif()
 
+# Keep honoring CMAKE_WARN_DEPRECATED, which the vendored dependencies use
+# to silence deprecation warnings (see cmake/kaldi-native-fbank.cmake).
+if(POLICY CMP0218)
+  cmake_policy(SET CMP0218 OLD)
+  set(CMAKE_POLICY_DEFAULT_CMP0218 OLD)
+endif()
+
 if(POLICY CMP0177)
   cmake_policy(SET CMP0177 NEW)
 endif()
@@ -28,7 +35,7 @@ project(sherpa-onnx)
 # Remember to update
 # ./CHANGELOG.md
 # ./new-release.sh
-set(SHERPA_ONNX_VERSION "1.13.2")
+set(SHERPA_ONNX_VERSION "2.0.3")
 
 # Disable warning about
 #
@@ -50,9 +57,9 @@ option(SHERPA_ONNX_ENABLE_TESTS "Whether to build tests" OFF)
 option(SHERPA_ONNX_ENABLE_CHECK "Whether to build with assert" OFF)
 option(BUILD_SHARED_LIBS "Whether to build shared libraries" OFF)
 option(SHERPA_ONNX_ENABLE_PORTAUDIO "Whether to build with portaudio" ON)
-option(SHERPA_ONNX_ENABLE_JNI "Whether to build JNI internface" OFF)
+option(SHERPA_ONNX_ENABLE_JNI "Whether to build JNI interface" OFF)
 option(SHERPA_ONNX_ENABLE_C_API "Whether to build C API" ON)
-option(SHERPA_ONNX_ENABLE_WEBSOCKET "Whether to build webscoket server/client" ON)
+option(SHERPA_ONNX_ENABLE_WEBSOCKET "Whether to build websocket server/client" ON)
 option(SHERPA_ONNX_ENABLE_GPU "Enable ONNX Runtime GPU support" OFF)
 option(SHERPA_ONNX_ENABLE_DIRECTML "Enable ONNX Runtime DirectML support" OFF)
 option(SHERPA_ONNX_LINK_D3D "Whether static ONNX runtime lib with DML" OFF)
@@ -60,11 +67,13 @@ option(SHERPA_ONNX_LINK_D3D "Whether static ONNX runtime lib with DML" OFF)
 option(SHERPA_ONNX_ENABLE_WASM "Whether to enable WASM" OFF)
 option(SHERPA_ONNX_ENABLE_WASM_SPEAKER_DIARIZATION "Whether to enable WASM for speaker diarization" OFF)
 option(SHERPA_ONNX_ENABLE_WASM_TTS "Whether to enable WASM for TTS" OFF)
+option(SHERPA_ONNX_ENABLE_WASM_FA "Whether to enable WASM for forced alignment" OFF)
 option(SHERPA_ONNX_ENABLE_WASM_ASR "Whether to enable WASM for ASR" OFF)
 option(SHERPA_ONNX_ENABLE_WASM_KWS "Whether to enable WASM for KWS" OFF)
 option(SHERPA_ONNX_ENABLE_WASM_VAD "Whether to enable WASM for VAD" OFF)
 option(SHERPA_ONNX_ENABLE_WASM_VAD_ASR "Whether to enable WASM for VAD+ASR" OFF)
 option(SHERPA_ONNX_ENABLE_WASM_NODEJS "Whether to enable WASM for NodeJS" OFF)
+option(SHERPA_ONNX_ENABLE_WASM_WEB "Whether to enable WASM for Web browser" OFF)
 option(SHERPA_ONNX_ENABLE_WASM_SPEECH_ENHANCEMENT "Whether to enable WASM for speech enhancement" OFF)
 option(SHERPA_ONNX_ENABLE_BINARY "Whether to build binaries" ${SUGGEST_BUILD_BINARIES})
 option(SHERPA_ONNX_ENABLE_TTS "Whether to build TTS related code" ON)
@@ -86,6 +95,24 @@ set(SHERPA_ONNX_LINUX_ARM64_GPU_ONNXRUNTIME_VERSION "1.11.0" CACHE STRING "Used 
 #   - Dynamic CRT:  /MD  (Release), /MDd (Debug)
 option(SHERPA_ONNX_USE_STATIC_CRT "For Windows only. ON to use static CRT (/MT /MTd); OFF to use dynamic (/MD /MDd)" ON)
 
+
+if(MSVC)
+  # The prebuilt onnxruntime libraries reference PDBs that are not shipped
+  # with them, so every link emits LNK4099 ("PDB ... was not found with
+  # ...; linking object as if no debug info") per object -- tens of
+  # thousands of lines per build. The debug info simply does not exist;
+  # ignore the warning instead of flooding the log.
+  add_link_options(/IGNORE:4099)
+
+  # The Visual Studio generator does not enable /MP, so each project
+  # compiles its sources one at a time; /MP parallelizes within a project.
+  # /FS is required for /Zi configs with /MP (serialized PDB writes).
+  add_compile_options(/MP /FS)
+
+  # Never link incrementally: the .ilk caches are debug-only, huge, and
+  # exhaust the runner's disk (LNK1116 error 112) in Debug/RelWithDebInfo.
+  add_link_options(/INCREMENTAL:NO)
+endif()
 
 # On Windows with MSVC, explicitly control which C runtime (CRT) to use.
 #
@@ -225,6 +252,7 @@ message(STATUS "SHERPA_ONNX_ENABLE_WASM_KWS ${SHERPA_ONNX_ENABLE_WASM_KWS}")
 message(STATUS "SHERPA_ONNX_ENABLE_WASM_VAD ${SHERPA_ONNX_ENABLE_WASM_VAD}")
 message(STATUS "SHERPA_ONNX_ENABLE_WASM_VAD_ASR ${SHERPA_ONNX_ENABLE_WASM_VAD_ASR}")
 message(STATUS "SHERPA_ONNX_ENABLE_WASM_NODEJS ${SHERPA_ONNX_ENABLE_WASM_NODEJS}")
+message(STATUS "SHERPA_ONNX_ENABLE_WASM_WEB ${SHERPA_ONNX_ENABLE_WASM_WEB}")
 message(STATUS "SHERPA_ONNX_ENABLE_WASM_SPEECH_ENHANCEMENT ${SHERPA_ONNX_ENABLE_WASM_SPEECH_ENHANCEMENT}")
 message(STATUS "SHERPA_ONNX_ENABLE_BINARY ${SHERPA_ONNX_ENABLE_BINARY}")
 message(STATUS "SHERPA_ONNX_ENABLE_TTS ${SHERPA_ONNX_ENABLE_TTS}")
@@ -330,14 +358,14 @@ if(SHERPA_ONNX_ENABLE_WASM_NODEJS)
   add_definitions(-DSHERPA_ONNX_ENABLE_WASM_KWS=1)
 endif()
 
+if(SHERPA_ONNX_ENABLE_WASM_WEB)
+  if(NOT SHERPA_ONNX_ENABLE_WASM)
+    message(FATAL_ERROR "Please set SHERPA_ONNX_ENABLE_WASM to ON if you enable WASM for Web")
+  endif()
+endif()
+
 if(SHERPA_ONNX_ENABLE_WASM)
   add_definitions(-DSHERPA_ONNX_ENABLE_WASM=1)
-  # Build every wasm artifact with pthread/atomics support so the .a files
-  # can be linked with the threaded ONNX Runtime prebuild and a wasm module
-  # that pre-spawns a worker pool. Browsers require COOP/COEP headers to
-  # expose SharedArrayBuffer; wasm/serve.py is provided for that.
-  string(APPEND CMAKE_C_FLAGS " -pthread")
-  string(APPEND CMAKE_CXX_FLAGS " -pthread -fexceptions")
 endif()
 
 if(SHERPA_ONNX_ENABLE_WASM_KWS)
@@ -540,7 +568,13 @@ if(SHERPA_ONNX_ENABLE_PYTHON)
 endif()
 
 include(kaldi-native-fbank)
+include(kaldi-native-io)
+include(kissfft)
+include(openfst)
+include(utf8proc)
+include(kaldifst)
 include(kaldi-decoder)
+include(kaldi-hmm-gmm)
 include(onnxruntime)
 include(simple-sentencepiece)
 set(ONNXRUNTIME_DIR ${onnxruntime_SOURCE_DIR})
@@ -563,13 +597,6 @@ if(SHERPA_ONNX_ENABLE_WEBSOCKET)
 endif()
 
 include(json)
-
-if(SHERPA_ONNX_ENABLE_TTS)
-  include(espeak-ng-for-piper)
-  set(ESPEAK_NG_DIR ${espeak_ng_SOURCE_DIR})
-  message(STATUS "ESPEAK_NG_DIR: ${ESPEAK_NG_DIR}")
-  include(piper-phonemize)
-endif()
 
 if(SHERPA_ONNX_ENABLE_SPEAKER_DIARIZATION)
   include(hclust-cpp)
@@ -605,7 +632,6 @@ endif()
 add_subdirectory(sherpa-onnx)
 
 if(SHERPA_ONNX_ENABLE_C_API AND SHERPA_ONNX_ENABLE_BINARY AND SHERPA_ONNX_BUILD_C_API_EXAMPLES)
-  set(SHERPA_ONNX_PKG_WITH_CARGS "-lcargs")
   add_subdirectory(c-api-examples)
   add_subdirectory(cxx-api-examples)
 endif()

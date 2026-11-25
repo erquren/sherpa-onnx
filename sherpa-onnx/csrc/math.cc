@@ -97,9 +97,11 @@ void ComputeMeanAndInvStd(const float *p, int32_t num_rows, int32_t num_cols,
 
   Eigen::RowVectorXf mean_vec = X.colwise().mean();
 
-  Eigen::RowVectorXf mean_sq = X.array().square().colwise().mean();
-
-  Eigen::RowVectorXf var = mean_sq.array() - mean_vec.array().square();
+  // E[x^2] - E[x]^2 cancels catastrophically in float32 when a feature
+  // stays near a constant value, so compute the variance from centered
+  // values instead.
+  Eigen::RowVectorXf var =
+      (X.rowwise() - mean_vec).array().square().colwise().mean();
 
   Eigen::RowVectorXf stddev = var.array().max(0.0f).sqrt();
 
@@ -129,16 +131,32 @@ void NormalizeWhisperFeatures(float *features, int32_t num_frames,
   feats = (feats + 4.0f) / 4.0f;
 }
 
-void NemoNormalizePerFeature(float *p, int32_t num_frames,
-                             int32_t feature_dim) {
+void NemoNormalizePerFeature(float *p, int32_t num_frames, int32_t feature_dim,
+                             bool sample_variance) {
   using RowMajorMat =
       Eigen::Matrix<float, Eigen::Dynamic, Eigen::Dynamic, Eigen::RowMajor>;
 
   Eigen::Map<RowMajorMat> x(p, num_frames, feature_dim);
 
-  Eigen::RowVectorXf mean = x.colwise().mean();
+  Eigen::RowVectorXf mean;
+  if (sample_variance) {
+    // Match NeMo's reference-centered reduction so constant log-floor bins
+    // remain exactly zero after normalization.
+    Eigen::RowVectorXf reference = x.row(0);
+    mean = reference + (x.rowwise() - reference).colwise().mean();
+  } else {
+    mean = x.colwise().mean();
+  }
+
+  // E[x^2] - E[x]^2 cancels catastrophically in float32 when a feature
+  // stays near a constant value, yielding var == 0 and huge normalized
+  // outliers, so compute the variance from centered values instead.
   Eigen::RowVectorXf var =
-      (x.array().square().colwise().mean() - mean.array().square()).max(0.0f);
+      (x.rowwise() - mean).array().square().colwise().mean();
+
+  if (sample_variance && num_frames > 1) {
+    var *= static_cast<float>(num_frames) / (num_frames - 1);
+  }
 
   Eigen::RowVectorXf inv_std = (var.array().sqrt() + 1e-5f).inverse();
 
@@ -149,7 +167,7 @@ int32_t MaxElementIndex(const float *v, int32_t n) {
   // Map raw pointer to an Eigen vector (no copy)
   Eigen::Map<const Eigen::VectorXf> vec(v, n);
 
-  Eigen::Index maxIndex;
+  Eigen::Index maxIndex = 0;
   vec.maxCoeff(&maxIndex);
 
   return static_cast<int32_t>(maxIndex);

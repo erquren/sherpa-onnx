@@ -7,7 +7,6 @@
 // License (Copyright (c) 2025 Supertone Inc.)
 
 #include "sherpa-onnx/csrc/offline-tts-supertonic-model.h"
-#include "sherpa-onnx/csrc/ort-env.h"
 
 #include <memory>
 #include <sstream>
@@ -39,7 +38,7 @@ class OfflineTtsSupertonicModel::Impl {
  public:
   explicit Impl(const OfflineTtsModelConfig &config)
       : config_(config),
-        env_(CreateOrtEnv()),
+        env_(ORT_LOGGING_LEVEL_ERROR),
         sess_opts_(GetSessionOptions(config)) {
     Init();
   }
@@ -47,7 +46,7 @@ class OfflineTtsSupertonicModel::Impl {
   template <typename Manager>
   Impl(Manager *mgr, const OfflineTtsModelConfig &config)
       : config_(config),
-        env_(CreateOrtEnv()),
+        env_(ORT_LOGGING_LEVEL_ERROR),
         sess_opts_(GetSessionOptions(config)) {
     Init(mgr);
   }
@@ -370,7 +369,7 @@ class OfflineTtsSupertonicModel::Impl {
   OfflineTtsModelConfig config_;
   Ort::Env env_;
   Ort::SessionOptions sess_opts_;
-  SupertonicConfig cfg_;
+  SupertonicConfig cfg_ = {};
 
   std::unique_ptr<Ort::Session> dp_sess_;
   std::unique_ptr<Ort::Session> text_enc_sess_;

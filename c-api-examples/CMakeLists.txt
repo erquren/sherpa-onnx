@@ -1,8 +1,9 @@
-include(cargs)
-
 include_directories(${PROJECT_SOURCE_DIR})
+add_executable(version-c-api version-c-api.c)
+target_link_libraries(version-c-api sherpa-onnx-c-api)
+
 add_executable(decode-file-c-api decode-file-c-api.c)
-target_link_libraries(decode-file-c-api sherpa-onnx-c-api cargs)
+target_link_libraries(decode-file-c-api sherpa-onnx-c-api)
 
 add_executable(kws-c-api kws-c-api.c)
 target_link_libraries(kws-c-api sherpa-onnx-c-api)
@@ -27,9 +28,27 @@ add_executable(online-speech-enhancement-dpdfnet-c-api
                online-speech-enhancement-dpdfnet-c-api.c)
 target_link_libraries(online-speech-enhancement-dpdfnet-c-api sherpa-onnx-c-api)
 
+add_executable(speech-enhancement-voxlock-c-api
+               speech-enhancement-voxlock-c-api.c)
+target_link_libraries(speech-enhancement-voxlock-c-api sherpa-onnx-c-api)
+
+add_executable(speech-enhancement-voxlock-with-voice-sample-c-api
+               speech-enhancement-voxlock-with-voice-sample-c-api.c)
+target_link_libraries(speech-enhancement-voxlock-with-voice-sample-c-api
+                      sherpa-onnx-c-api)
+
+add_executable(online-speech-enhancement-voxlock-c-api
+               online-speech-enhancement-voxlock-c-api.c)
+target_link_libraries(online-speech-enhancement-voxlock-c-api sherpa-onnx-c-api)
+
+add_executable(online-speech-enhancement-voxlock-with-voice-sample-c-api
+               online-speech-enhancement-voxlock-with-voice-sample-c-api.c)
+target_link_libraries(online-speech-enhancement-voxlock-with-voice-sample-c-api
+                      sherpa-onnx-c-api)
+
 if(SHERPA_ONNX_ENABLE_TTS)
   add_executable(offline-tts-c-api offline-tts-c-api.c)
-  target_link_libraries(offline-tts-c-api sherpa-onnx-c-api cargs)
+  target_link_libraries(offline-tts-c-api sherpa-onnx-c-api)
 
   add_executable(matcha-tts-zh-c-api matcha-tts-zh-c-api.c)
   target_link_libraries(matcha-tts-zh-c-api sherpa-onnx-c-api)
@@ -127,6 +146,9 @@ target_link_libraries(moonshine-v2-c-api sherpa-onnx-c-api)
 add_executable(zipformer-c-api zipformer-c-api.c)
 target_link_libraries(zipformer-c-api sherpa-onnx-c-api)
 
+add_executable(zipformer-ctc-hlg-c-api zipformer-ctc-hlg-c-api.c)
+target_link_libraries(zipformer-ctc-hlg-c-api sherpa-onnx-c-api)
+
 add_executable(wenet-ctc-c-api wenet-ctc-c-api.c)
 target_link_libraries(wenet-ctc-c-api sherpa-onnx-c-api)
 
@@ -181,6 +203,12 @@ target_link_libraries(streaming-ctc-buffered-tokens-c-api sherpa-onnx-c-api)
 add_executable(keywords-spotter-buffered-tokens-keywords-c-api
                keywords-spotter-buffered-tokens-keywords-c-api.c)
 target_link_libraries(keywords-spotter-buffered-tokens-keywords-c-api sherpa-onnx-c-api)
+
+add_executable(forced-alignment-en-c-api forced-alignment-en-c-api.c)
+target_link_libraries(forced-alignment-en-c-api sherpa-onnx-c-api)
+
+add_executable(forced-alignment-zh-c-api forced-alignment-zh-c-api.c)
+target_link_libraries(forced-alignment-zh-c-api sherpa-onnx-c-api)
 
 if(SHERPA_ONNX_HAS_ALSA)
   add_subdirectory(./asr-microphone-example)
