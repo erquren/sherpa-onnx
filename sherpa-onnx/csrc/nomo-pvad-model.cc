@@ -159,10 +159,11 @@ class NomoPvadModel::Impl {
 
     if (model_type.empty()) {
       SHERPA_ONNX_LOGE(
-          "Please download nomo-pvad.onnx from\n"
-          "https://github.com/k2-fsa/sherpa-onnx/releases/tag/vad-models\n"
-          "We have added meta data to the model exported from\n"
-          "https://huggingface.co/TuyaNomo/nomo-pvad");
+          "Please use a nomo-pvad.onnx that contains the meta data read by "
+          "sherpa-onnx.\nSee "
+          "https://k2-fsa.github.io/sherpa/onnx/vad/nomo-pvad.html\n"
+          "for the downloadable model files and for how to export them "
+          "from https://huggingface.co/TuyaNomo/nomo-pvad");
       SHERPA_ONNX_EXIT(-1);
     }
 
