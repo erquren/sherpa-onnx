@@ -1698,7 +1698,10 @@ struct NomoPvadModelConfig {
   float min_speech_duration = 0.25;
   /** Maximum speech duration in seconds before forced split. */
   float max_speech_duration = 20;
-  /** Threshold for speech -> silence. Negative means max(threshold-0.15, 0.01). */
+  /**
+   * Threshold for speech to silence. If negative, we use
+   * max(threshold - 0.15, 0.01).
+   */
   float neg_threshold = -1;
 };
 

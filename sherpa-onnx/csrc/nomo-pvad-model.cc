@@ -11,6 +11,7 @@
 #include <cstring>
 #include <functional>
 #include <memory>
+#include <sstream>
 #include <string>
 #include <utility>
 #include <vector>
@@ -131,7 +132,8 @@ class NomoPvadModel::Impl {
 
     Check(reader);
 
-    min_silence_samples_ = sample_rate_ * config_.nomo_pvad.min_silence_duration;
+    min_silence_samples_ =
+        sample_rate_ * config_.nomo_pvad.min_silence_duration;
     min_speech_samples_ = sample_rate_ * config_.nomo_pvad.min_speech_duration;
 
     SetThreshold(config_.nomo_pvad.threshold);
@@ -185,7 +187,8 @@ class NomoPvadModel::Impl {
     SHERPA_ONNX_READ_META_DATA(chunk_samples_, "chunk_samples");
     SHERPA_ONNX_READ_META_DATA_WITH_DEFAULT(window_samples_, "window_samples",
                                             38400);
-    SHERPA_ONNX_READ_META_DATA_WITH_DEFAULT(spk_embed_dim_, "spk_embed_dim", 192);
+    SHERPA_ONNX_READ_META_DATA_WITH_DEFAULT(spk_embed_dim_, "spk_embed_dim",
+                                            192);
 
     if (feature_dim_ != 80) {
       SHERPA_ONNX_LOGE("Expected feature dim 80. Given: %d", feature_dim_);
@@ -374,7 +377,8 @@ class NomoPvadModel::Impl {
     // of 16. Zero-pad the tail, exactly like the reference implementation.
     int32_t num_chunks = (num_frames + 15) / 16;
     int32_t num_padded_frames = num_chunks * 16;
-    features.resize(static_cast<size_t>(num_padded_frames) * feature_dim_, 0.0f);
+    features.resize(static_cast<size_t>(num_padded_frames) * feature_dim_,
+                    0.0f);
 
     auto memory_info =
         Ort::MemoryInfo::CreateCpu(OrtDeviceAllocator, OrtMemTypeDefault);

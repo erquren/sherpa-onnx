@@ -70,7 +70,8 @@ static bool ValidateNomoPvadModelConfig(const NomoPvadModelConfig &config,
     return false;
   }
 
-  if (!config.speaker_embedding_file.empty() && config.speaker_embedding.empty() &&
+  if (!config.speaker_embedding_file.empty() &&
+      config.speaker_embedding.empty() &&
       !exists(config.speaker_embedding_file)) {
     SHERPA_ONNX_LOGE("NOMO-PVAD speaker embedding file '%s' does not exist",
                      config.speaker_embedding_file.c_str());
